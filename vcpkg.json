@@ -1,0 +1,8 @@
+{
+  "name": "miniaudio-rnnoise",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "miniaudio",
+    "rnnoise"
+  ]
+}
