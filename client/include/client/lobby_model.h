@@ -1,0 +1,115 @@
+#pragma once
+
+#include <parties/types.h>
+
+#include <RmlUi/Core/Types.h>
+#include <RmlUi/Core/DataModelHandle.h>
+
+#include <functional>
+
+namespace Rml { class Context; }
+
+namespace parties::client {
+
+struct ChannelUser {
+    Rml::String name;
+    int id = 0;
+    int role = 0;
+    bool muted = false;
+    bool deafened = false;
+};
+
+struct ChannelInfo {
+    int id = 0;
+    Rml::String name;
+    int user_count = 0;
+    int max_users = 0;
+    Rml::Vector<ChannelUser> users;
+};
+
+struct AudioDevice {
+    Rml::String name;
+    int index = 0;
+};
+
+struct ShareTarget {
+    Rml::String name;
+    int index = 0;       // index into App's capture_targets_ vector
+    bool is_monitor = false;
+};
+
+struct ActiveSharer {
+    int id = 0;
+    Rml::String name;
+};
+
+class LobbyModel {
+public:
+    LobbyModel();
+    ~LobbyModel();
+
+    bool init(Rml::Context* context);
+
+    void dirty(const Rml::String& variable);
+    void dirty_all();
+
+    // --- Bound state (public for App to update directly) ---
+    bool is_connected = false;
+    Rml::String server_name;
+    Rml::String username;
+    Rml::String error_text;
+
+    Rml::Vector<ChannelInfo> channels;
+    int current_channel = 0;
+    Rml::String current_channel_name;
+
+    bool is_muted = false;
+    bool is_deafened = false;
+    bool show_settings = false;
+
+    // Audio settings
+    Rml::Vector<AudioDevice> capture_devices;
+    Rml::Vector<AudioDevice> playback_devices;
+    int selected_capture = 0;
+    int selected_playback = 0;
+    bool denoise_enabled = true;
+    bool normalize_enabled = false;
+    float normalize_target = 0.5f;
+    bool vad_enabled = false;
+    float vad_threshold = 0.02f;
+    float voice_level = 0.0f;
+
+    // Screen sharing
+    bool is_sharing = false;
+    bool someone_sharing = false;           // convenience: !sharers.empty()
+    Rml::Vector<ActiveSharer> sharers;      // all active sharers in channel
+    int viewing_sharer_id = 0;              // who we're subscribed to (0 = none)
+
+    // Share picker
+    bool show_share_picker = false;
+    Rml::Vector<ShareTarget> share_targets;
+
+    // --- Callbacks (set by App before init) ---
+    std::function<void(int)>   on_join_channel;
+    std::function<void()>      on_leave_channel;
+    std::function<void()>      on_toggle_mute;
+    std::function<void()>      on_toggle_deafen;
+    std::function<void(int)>   on_select_capture;
+    std::function<void(int)>   on_select_playback;
+    std::function<void(bool)>  on_denoise_changed;
+    std::function<void(bool)>  on_normalize_changed;
+    std::function<void(float)> on_normalize_target_changed;
+    std::function<void(bool)>  on_vad_changed;
+    std::function<void(float)> on_vad_threshold_changed;
+    std::function<void()>      on_toggle_share;
+    std::function<void(int)>   on_select_share_target;
+    std::function<void()>      on_cancel_share;
+    std::function<void(int)>   on_watch_sharer;
+    std::function<void(int)>   on_select_sharer;
+    std::function<void()>      on_stop_watching;
+
+private:
+    Rml::DataModelHandle handle_;
+};
+
+} // namespace parties::client

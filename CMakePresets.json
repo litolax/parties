@@ -3,29 +3,52 @@
   "configurePresets": [
     {
       "name": "default",
-      "displayName": "Default",
+      "displayName": "Default (clang-cl Debug)",
+      "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/ports",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static-mt"
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-mt",
+        "VCPKG_MANIFEST_FEATURES": "client",
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/ninja.exe"
       }
     },
     {
       "name": "release",
-      "displayName": "Release",
+      "displayName": "Release (clang-cl)",
       "inherits": "default",
+      "binaryDir": "${sourceDir}/build-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
-      "name": "debug",
-      "displayName": "Debug",
+      "name": "asan",
+      "displayName": "RelWithDebInfo + ASAN",
       "inherits": "default",
+      "binaryDir": "${sourceDir}/build-asan",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release (server only)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/ports",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-static",
+        "BUILD_CLIENT": "OFF"
       }
     }
   ],
@@ -39,8 +62,12 @@
       "configurePreset": "release"
     },
     {
-      "name": "debug",
-      "configurePreset": "debug"
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
     }
   ]
 }

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+    <defs>
+        <!-- Background Dark Gradient for the App Icon -->
+        <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#191924"/>
+            <stop offset="100%" stop-color="#0C0C12"/>
+        </linearGradient>
+
+        <!-- Vibrant Party Neon Gradient for the Chat Bubble -->
+        <linearGradient id="partyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#7000FF"/>
+            <stop offset="50%" stop-color="#FF007A"/>
+            <stop offset="100%" stop-color="#FF9000"/>
+        </linearGradient>
+
+        <!-- Glow Filter for the Neumorphic/Neon Lighting Effect -->
+        <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="22" result="blur" />
+        </filter>
+
+        <!-- Mask to Cut Out the 'p' and Sparkles from the Chat Bubble -->
+        <mask id="cutoutMask">
+            <!-- 1. Keep the entire bubble area visible by default -->
+            <rect width="512" height="512" fill="white"/>
+
+            <!-- 2. Cut out the stem of the lowercase 'p' (Black = Hidden) -->
+            <rect x="160" y="135" width="60" height="225" rx="30" fill="black" />
+
+            <!-- 3. Cut out the main loop of the 'p' (Black = Hidden) -->
+            <circle cx="270" cy="210" r="75" fill="black" />
+
+            <!-- 4. Cut out smaller secondary floating party sparkles (Confetti effect) -->
+            <!-- Bottom Right Sparkle -->
+            <path d="M 370 300 Q 370 330 400 330 Q 370 330 370 360 Q 370 330 340 330 Q 370 330 370 300 Z" fill="black" />
+            <!-- Top Left Sparkle -->
+            <path d="M 130 135 Q 130 150 145 150 Q 130 150 130 165 Q 130 150 115 150 Q 130 150 130 135 Z" fill="black" />
+
+            <!-- 5. Restore the gradient INSIDE the 'p' loop to create a negative space Sparkle -->
+            <!-- This white shape sits inside the black circle, letting the vivid gradient shine through -->
+            <path d="M 270 160 Q 270 210 320 210 Q 270 210 270 260 Q 270 210 220 210 Q 270 210 270 160 Z" fill="white" />
+        </mask>
+
+        <!-- Unified Seamless Chat Bubble Path (with precise Arc geometry) -->
+        <path id="chatBubblePath" d="
+            M 180 100
+            L 332 100
+            A 100 100 0 0 1 432 200
+            L 432 310
+            A 100 100 0 0 1 332 410
+            L 200 410
+            L 100 475
+            A 15 15 0 0 1 85 455
+            L 110 381.42
+            A 100 100 0 0 1 80 310
+            L 80 200
+            A 100 100 0 0 1 180 100 Z" />
+    </defs>
+
+    <!-- App Icon Base Squircle -->
+    <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+
+    <!-- Ambient Neon Glow Behind Bubble -->
+    <use href="#chatBubblePath" fill="url(#partyGrad)" filter="url(#neonGlow)" opacity="0.45" />
+
+    <!-- Main Chat Bubble with the Complex Cutout Mask -->
+    <use href="#chatBubblePath" fill="url(#partyGrad)" mask="url(#cutoutMask)" />
+
+</svg>

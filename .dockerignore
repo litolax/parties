@@ -1,0 +1,10 @@
+build/
+build-*/
+vcpkg/
+.git/
+.claude/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.o

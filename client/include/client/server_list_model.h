@@ -1,0 +1,67 @@
+#pragma once
+
+#include <RmlUi/Core/Types.h>
+#include <RmlUi/Core/DataModelHandle.h>
+
+#include <functional>
+
+namespace Rml { class Context; }
+
+namespace parties::client {
+
+struct ServerEntry {
+    int id = 0;
+    Rml::String name;
+    Rml::String host;
+    int port = 7800;
+    Rml::String last_username;
+    Rml::String initials;  // first 2 chars of name, computed by App
+};
+
+class ServerListModel {
+public:
+    ServerListModel();
+    ~ServerListModel();
+
+    bool init(Rml::Context* context);
+
+    void dirty(const Rml::String& variable);
+
+    // --- Bound state ---
+    Rml::Vector<ServerEntry> servers;
+
+    // Add/Edit form
+    bool show_add_form = false;
+    int editing_id = 0;
+    Rml::String edit_name;
+    Rml::String edit_host;
+    Rml::String edit_port;
+    Rml::String edit_error;
+
+    // Login overlay
+    bool show_login = false;
+    Rml::String login_username;
+    Rml::String login_password;
+    Rml::String login_error;
+    Rml::String login_status;
+
+    // Active server tracking
+    int connected_server_id = 0;
+
+    // Context menu
+    bool show_context_menu = false;
+    int context_menu_server_id = 0;
+
+    // --- Callbacks (set by App) ---
+    std::function<void(int)>  on_connect_server;
+    std::function<void(int)>  on_delete_server;
+    std::function<void()>     on_save_server;
+    std::function<void()>     on_do_connect;
+    std::function<void()>     on_cancel_login;
+    std::function<void(int, int, int)> on_show_context_menu;  // id, mouse_x, mouse_y
+
+private:
+    Rml::DataModelHandle handle_;
+};
+
+} // namespace parties::client

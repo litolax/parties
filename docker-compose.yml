@@ -1,0 +1,12 @@
+services:
+  parties-server:
+    image: tuxick/parties-server:latest
+    ports:
+      - "7800:7800"       # TLS control plane (TCP)
+      - "7801:7801/udp"   # ENet data plane (UDP)
+    volumes:
+      - parties-data:/data
+    restart: unless-stopped
+
+volumes:
+  parties-data:

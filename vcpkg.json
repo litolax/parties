@@ -1,8 +1,27 @@
 {
-  "name": "miniaudio-rnnoise",
+  "name": "parties",
   "version-string": "0.1.0",
   "dependencies": [
-    "miniaudio",
-    "rnnoise"
-  ]
+    "argon2",
+    "enet",
+    "opus",
+    "sqlite3",
+    "toml11",
+    "wolfssl"
+  ],
+  "features": {
+    "client": {
+      "description": "Client GUI dependencies",
+      "dependencies": [
+        "d3d12-memory-allocator",
+        "miniaudio",
+        "dav1d",
+        {
+          "name": "rmlui",
+          "features": ["svg"]
+        },
+        "rnnoise"
+      ]
+    }
+  }
 }

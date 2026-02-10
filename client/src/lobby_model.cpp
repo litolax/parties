@@ -1,0 +1,237 @@
+#include <client/lobby_model.h>
+
+#include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/DataModelHandle.h>
+
+namespace parties::client {
+
+LobbyModel::LobbyModel() = default;
+LobbyModel::~LobbyModel() = default;
+
+bool LobbyModel::init(Rml::Context* context) {
+    Rml::DataModelConstructor ctor = context->CreateDataModel("lobby");
+    if (!ctor)
+        return false;
+
+    // Register struct + array types
+    // Order matters: array types must be registered BEFORE structs that contain them as members.
+    // ChannelInfo has a Vector<ChannelUser> member, so register ChannelUser + its array first.
+
+    if (auto s = ctor.RegisterStruct<ChannelUser>()) {
+        s.RegisterMember("name",     &ChannelUser::name);
+        s.RegisterMember("id",       &ChannelUser::id);
+        s.RegisterMember("role",     &ChannelUser::role);
+        s.RegisterMember("muted",    &ChannelUser::muted);
+        s.RegisterMember("deafened", &ChannelUser::deafened);
+    }
+    ctor.RegisterArray<Rml::Vector<ChannelUser>>();
+
+    if (auto s = ctor.RegisterStruct<ChannelInfo>()) {
+        s.RegisterMember("id",         &ChannelInfo::id);
+        s.RegisterMember("name",       &ChannelInfo::name);
+        s.RegisterMember("user_count", &ChannelInfo::user_count);
+        s.RegisterMember("max_users",  &ChannelInfo::max_users);
+        s.RegisterMember("users",      &ChannelInfo::users);
+    }
+    ctor.RegisterArray<Rml::Vector<ChannelInfo>>();
+
+    if (auto s = ctor.RegisterStruct<AudioDevice>()) {
+        s.RegisterMember("name",  &AudioDevice::name);
+        s.RegisterMember("index", &AudioDevice::index);
+    }
+    ctor.RegisterArray<Rml::Vector<AudioDevice>>();
+
+    if (auto s = ctor.RegisterStruct<ShareTarget>()) {
+        s.RegisterMember("name",       &ShareTarget::name);
+        s.RegisterMember("index",      &ShareTarget::index);
+        s.RegisterMember("is_monitor", &ShareTarget::is_monitor);
+    }
+    ctor.RegisterArray<Rml::Vector<ShareTarget>>();
+
+    if (auto s = ctor.RegisterStruct<ActiveSharer>()) {
+        s.RegisterMember("id",   &ActiveSharer::id);
+        s.RegisterMember("name", &ActiveSharer::name);
+    }
+    ctor.RegisterArray<Rml::Vector<ActiveSharer>>();
+
+    // Bind variables
+    ctor.Bind("is_connected",   &is_connected);
+    ctor.Bind("server_name",    &server_name);
+    ctor.Bind("username",       &username);
+    ctor.Bind("error_text",     &error_text);
+    ctor.Bind("channels",       &channels);
+    ctor.Bind("current_channel",     &current_channel);
+    ctor.Bind("current_channel_name",&current_channel_name);
+    ctor.Bind("is_muted",       &is_muted);
+    ctor.Bind("is_deafened",    &is_deafened);
+    ctor.Bind("show_settings",  &show_settings);
+
+    ctor.Bind("capture_devices",  &capture_devices);
+    ctor.Bind("playback_devices", &playback_devices);
+    ctor.Bind("selected_capture", &selected_capture);
+    ctor.Bind("selected_playback",&selected_playback);
+    ctor.Bind("denoise_enabled",  &denoise_enabled);
+    ctor.Bind("normalize_enabled",&normalize_enabled);
+    ctor.Bind("normalize_target", &normalize_target);
+    ctor.Bind("vad_enabled",      &vad_enabled);
+    ctor.Bind("vad_threshold",    &vad_threshold);
+    ctor.Bind("voice_level",      &voice_level);
+
+    // Screen sharing
+    ctor.Bind("is_sharing",          &is_sharing);
+    ctor.Bind("someone_sharing",     &someone_sharing);
+    ctor.Bind("sharers",             &sharers);
+    ctor.Bind("viewing_sharer_id",   &viewing_sharer_id);
+
+    // Share picker
+    ctor.Bind("show_share_picker", &show_share_picker);
+    ctor.Bind("share_targets",     &share_targets);
+
+    // Event callbacks
+    ctor.BindEventCallback("join_channel",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty() && on_join_channel)
+                on_join_channel(args[0].Get<int>());
+        });
+
+    ctor.BindEventCallback("leave_channel",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_leave_channel) on_leave_channel();
+        });
+
+    ctor.BindEventCallback("toggle_mute",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_toggle_mute) on_toggle_mute();
+        });
+
+    ctor.BindEventCallback("toggle_deafen",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_toggle_deafen) on_toggle_deafen();
+        });
+
+    ctor.BindEventCallback("toggle_settings",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            show_settings = !show_settings;
+            dirty("show_settings");
+        });
+
+    ctor.BindEventCallback("select_capture",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty()) {
+                selected_capture = args[0].Get<int>();
+                dirty("selected_capture");
+                if (on_select_capture) on_select_capture(selected_capture);
+            }
+        });
+
+    ctor.BindEventCallback("select_playback",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty()) {
+                selected_playback = args[0].Get<int>();
+                dirty("selected_playback");
+                if (on_select_playback) on_select_playback(selected_playback);
+            }
+        });
+
+    ctor.BindEventCallback("toggle_denoise",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            denoise_enabled = !denoise_enabled;
+            dirty("denoise_enabled");
+            if (on_denoise_changed) on_denoise_changed(denoise_enabled);
+        });
+
+    ctor.BindEventCallback("toggle_normalize",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            normalize_enabled = !normalize_enabled;
+            dirty("normalize_enabled");
+            if (on_normalize_changed) on_normalize_changed(normalize_enabled);
+        });
+
+    ctor.BindEventCallback("toggle_vad",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            vad_enabled = !vad_enabled;
+            dirty("vad_enabled");
+            if (on_vad_changed) on_vad_changed(vad_enabled);
+        });
+
+    ctor.BindEventCallback("normalize_target_changed",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_normalize_target_changed) on_normalize_target_changed(normalize_target);
+        });
+
+    ctor.BindEventCallback("vad_threshold_changed",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_vad_threshold_changed) on_vad_threshold_changed(vad_threshold);
+        });
+
+    ctor.BindEventCallback("toggle_share",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_toggle_share) on_toggle_share();
+        });
+
+    ctor.BindEventCallback("select_share_target",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty() && on_select_share_target)
+                on_select_share_target(args[0].Get<int>());
+        });
+
+    ctor.BindEventCallback("cancel_share",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_cancel_share) on_cancel_share();
+        });
+
+    ctor.BindEventCallback("watch_sharer",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty() && on_watch_sharer)
+                on_watch_sharer(args[0].Get<int>());
+        });
+
+    ctor.BindEventCallback("select_sharer",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty() && on_select_sharer)
+                on_select_sharer(args[0].Get<int>());
+        });
+
+    ctor.BindEventCallback("stop_watching",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_stop_watching) on_stop_watching();
+        });
+
+    handle_ = ctor.GetModelHandle();
+    return true;
+}
+
+void LobbyModel::dirty(const Rml::String& variable) {
+    handle_.DirtyVariable(variable);
+}
+
+void LobbyModel::dirty_all() {
+    dirty("is_connected");
+    dirty("server_name");
+    dirty("username");
+    dirty("error_text");
+    dirty("channels");
+    dirty("current_channel");
+    dirty("current_channel_name");
+    dirty("is_muted");
+    dirty("is_deafened");
+    dirty("show_settings");
+    dirty("capture_devices");
+    dirty("playback_devices");
+    dirty("selected_capture");
+    dirty("selected_playback");
+    dirty("denoise_enabled");
+    dirty("normalize_enabled");
+    dirty("normalize_target");
+    dirty("vad_enabled");
+    dirty("vad_threshold");
+    dirty("voice_level");
+    dirty("is_sharing");
+    dirty("someone_sharing");
+    dirty("sharers");
+    dirty("viewing_sharer_id");
+    dirty("show_share_picker");
+    dirty("share_targets");
+}
+
+} // namespace parties::client

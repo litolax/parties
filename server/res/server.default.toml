@@ -1,0 +1,25 @@
+[server]
+name = "My Parties Server"
+listen_ip = "0.0.0.0"
+control_port = 7800
+data_port = 7801
+max_clients = 64
+password = ""
+
+[tls]
+cert_file = "server.der"
+key_file = "server.key.der"
+
+[database]
+path = "parties.db"
+
+[auth]
+admin_password = "changeme"
+allow_registration = true
+
+[voice]
+max_users_per_channel = 32
+default_bitrate = 32000
+
+[logging]
+level = "info"

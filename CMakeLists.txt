@@ -1,12 +1,39 @@
 cmake_minimum_required(VERSION 3.20)
-project(miniaudio-rnnoise C)
+project(parties VERSION 0.1.0 LANGUAGES CXX C)
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+option(BUILD_CLIENT "Build the client application" ON)
 
-# --- RNNoise (from vcpkg overlay port) ---
-find_package(rnnoise CONFIG REQUIRED)
+if(MSVC OR CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
-# --- Main executable ---
-add_executable(${PROJECT_NAME} src/main.c)
-target_link_libraries(${PROJECT_NAME} PRIVATE rnnoise::rnnoise)
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address)
+    # Disable STL container annotations — vcpkg libs aren't ASAN-instrumented
+    add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
+    # Link clang ASAN runtime — lld-link doesn't auto-find it
+    get_filename_component(_CLANG_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(_CLANG_RT "${_CLANG_BIN}/../lib/clang/20/lib/windows")
+    cmake_path(NORMAL_PATH _CLANG_RT)
+    link_libraries(
+        "${_CLANG_RT}/clang_rt.asan_dynamic-x86_64.lib"
+        "${_CLANG_RT}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib"
+    )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-unused-command-line-argument -Wno-c23-extensions)
+    # Full LTO in Release
+    add_compile_options($<$<CONFIG:Release>:-flto=full>)
+    add_link_options($<$<CONFIG:Release>:-flto=full>)
+endif()
+
+add_subdirectory(common)
+add_subdirectory(server)
+if(BUILD_CLIENT)
+    add_subdirectory(client)
+endif()

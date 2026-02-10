@@ -1,0 +1,318 @@
+<rml>
+<head>
+    <title>Parties</title>
+    <link type="text/rcss" href="style.rcss" />
+</head>
+<body class="fullscreen">
+
+    <!-- Custom titlebar -->
+    <div class="titlebar" id="titlebar-drag">
+        <div class="titlebar-left">
+            <svg class="titlebar-logo" src="logo.svg" width="20" height="20" />
+            <span class="titlebar-title">Parties</span>
+        </div>
+        <div class="titlebar-buttons">
+            <div class="titlebar-btn" id="titlebar-minimize">
+                <div class="tb-icon-minimize"></div>
+            </div>
+            <div class="titlebar-btn" id="titlebar-maximize">
+                <div class="tb-icon-maximize"></div>
+            </div>
+            <div class="titlebar-btn titlebar-btn-close" id="titlebar-close">
+                <div class="tb-icon-close">
+                    <div class="tb-icon-close-a"></div>
+                    <div class="tb-icon-close-b"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App content area (below titlebar) -->
+    <div class="app-content">
+
+    <!-- Server icon strip (far left, always visible) -->
+    <div class="server-strip" data-model="serverlist">
+        <div class="server-strip-list">
+            <div data-for="srv : servers">
+                <div class="server-icon"
+                     data-class-active="srv.id == connected_server_id"
+                     data-event-mousedown="server_mousedown(srv.id)">
+                    <span class="server-initials">{{ srv.initials }}</span>
+                </div>
+            </div>
+        </div>
+        <div class="server-strip-bottom">
+            <div class="server-icon server-icon-add" data-event-click="add_server">
+                <span class="server-initials">+</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar (only when connected) -->
+    <div class="sidebar" data-model="lobby" data-if="is_connected">
+        <div class="server-header">
+            <span class="server-title">{{ server_name }}</span>
+        </div>
+
+        <div class="channel-section">
+            <div class="channel-category">Voice Channels</div>
+            <div data-for="ch : channels">
+                <div class="channel-item"
+                     data-class-active="ch.id == current_channel"
+                     data-event-click="join_channel(ch.id)">
+                    <span class="channel-hash">#</span>
+                    <span class="channel-name">{{ ch.name }}</span>
+                    <span class="channel-count">({{ ch.user_count }})</span>
+                </div>
+                <div data-for="user : ch.users" class="channel-user-item">
+                    <span class="user-dot">&#x25CF;</span>
+                    <span class="channel-username">{{ user.name }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar-bottom">
+            <!-- Voice controls (visible when in a channel) -->
+            <div class="voice-panel" data-if="current_channel > 0">
+                <div class="voice-btn-row">
+                    <div class="voice-btn" data-class-active="is_muted"
+                         data-event-click="toggle_mute">
+                        <svg class="voice-icon" src="icon-unmute.svg" width="20" height="20" data-if="is_muted == false" />
+                        <svg class="voice-icon" src="icon-mute.svg" width="20" height="20" data-if="is_muted" />
+                    </div>
+                    <div class="voice-btn" data-class-active="is_deafened"
+                         data-event-click="toggle_deafen">
+                        <svg class="voice-icon" src="icon-undeafen.svg" width="20" height="20" data-if="is_deafened == false" />
+                        <svg class="voice-icon" src="icon-deafen.svg" width="20" height="20" data-if="is_deafened" />
+                    </div>
+                    <div class="voice-btn" data-class-active="is_sharing"
+                         data-event-click="toggle_share">
+                        <svg class="voice-icon" src="icon-share.svg" width="20" height="20" data-if="is_sharing == false" />
+                        <svg class="voice-icon" src="icon-sharing.svg" width="20" height="20" data-if="is_sharing" />
+                    </div>
+                    <div class="voice-btn btn-disconnect"
+                         data-event-click="leave_channel">
+                        <svg class="voice-icon" src="icon-leave.svg" width="20" height="20" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="user-panel">
+                <span class="user-name">{{ username }}</span>
+                <span class="settings-btn" data-event-click="toggle_settings">Settings</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main content -->
+    <div class="main-content" data-model="lobby">
+        <!-- Not connected: empty state -->
+        <div class="no-server-state" data-if="is_connected == false">
+            <span class="text-muted-msg">Select a server to get started</span>
+        </div>
+
+        <!-- Settings overlay -->
+        <div class="settings-overlay" data-if="is_connected && show_settings == true && show_share_picker == false">
+            <div class="settings-header">
+                <h2>Settings</h2>
+                <span class="settings-close" data-event-click="toggle_settings">X</span>
+            </div>
+
+            <!-- Input device -->
+            <div class="settings-section">
+                <div class="settings-label">Input Device</div>
+                <div class="device-list">
+                    <div data-for="dev : capture_devices"
+                         class="device-item"
+                         data-class-selected="dev.index == selected_capture"
+                         data-event-click="select_capture(dev.index)">
+                        {{ dev.name }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Output device -->
+            <div class="settings-section">
+                <div class="settings-label">Output Device</div>
+                <div class="device-list">
+                    <div data-for="dev : playback_devices"
+                         class="device-item"
+                         data-class-selected="dev.index == selected_playback"
+                         data-event-click="select_playback(dev.index)">
+                        {{ dev.name }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Noise cancellation toggle -->
+            <div class="settings-section">
+                <div class="settings-toggle" data-event-click="toggle_denoise">
+                    <span class="toggle-indicator" data-class-on="denoise_enabled"></span>
+                    <span class="toggle-label">Noise Cancellation</span>
+                </div>
+            </div>
+
+            <!-- Voice normalization -->
+            <div class="settings-section">
+                <div class="settings-toggle" data-event-click="toggle_normalize">
+                    <span class="toggle-indicator" data-class-on="normalize_enabled"></span>
+                    <span class="toggle-label">Voice Normalization</span>
+                </div>
+                <div class="slider-row" data-if="normalize_enabled">
+                    <span class="slider-label">Target Level</span>
+                    <input type="range" class="slider" min="0" max="1" step="0.01"
+                           data-value="normalize_target"
+                           data-event-change="normalize_target_changed" />
+                </div>
+            </div>
+
+            <!-- Voice activation -->
+            <div class="settings-section">
+                <div class="settings-toggle" data-event-click="toggle_vad">
+                    <span class="toggle-indicator" data-class-on="vad_enabled"></span>
+                    <span class="toggle-label">Voice Activation</span>
+                </div>
+                <div class="vad-settings" data-if="vad_enabled">
+                    <div class="slider-row">
+                        <span class="slider-label">Threshold</span>
+                        <input type="range" class="slider" min="0" max="1" step="0.01"
+                               data-value="vad_threshold"
+                               data-event-change="vad_threshold_changed" />
+                    </div>
+                    <div class="level-meter">
+                        <div id="voice-level-fill" class="level-fill"></div>
+                        <div id="vad-threshold-marker" class="threshold-marker"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Share target picker -->
+        <div class="share-picker-overlay" data-if="is_connected && show_share_picker">
+            <div class="share-picker-header">
+                <h2>Share Screen</h2>
+                <span class="settings-close" data-event-click="cancel_share">X</span>
+            </div>
+            <div class="share-picker-section">
+                <div class="settings-label">Monitors</div>
+                <div data-for="target : share_targets">
+                    <div class="share-target-item"
+                         data-if="target.is_monitor"
+                         data-event-click="select_share_target(target.index)">
+                        {{ target.name }}
+                    </div>
+                </div>
+            </div>
+            <div class="share-picker-section">
+                <div class="settings-label">Windows</div>
+                <div class="share-target-list">
+                    <div data-for="target : share_targets">
+                        <div class="share-target-item"
+                             data-if="target.is_monitor == false"
+                             data-event-click="select_share_target(target.index)">
+                            {{ target.name }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Channel content -->
+        <div class="channel-content" data-if="is_connected && show_settings == false && show_share_picker == false">
+            <div class="channel-header" data-if="current_channel > 0">
+                <span class="channel-title"># {{ current_channel_name }}</span>
+            </div>
+            <div class="channel-header" data-if="current_channel == 0">
+                <span class="channel-hint">Select a channel</span>
+            </div>
+            <!-- Sharer cards (sharers exist but not watching) -->
+            <div class="sharer-cards" data-if="someone_sharing && viewing_sharer_id == 0">
+                <div data-for="sharer : sharers">
+                    <div class="sharer-card" data-event-click="watch_sharer(sharer.id)">
+                        <div class="sharer-card-icon">
+                            <div class="sharer-card-screen"></div>
+                            <div class="sharer-card-stand"></div>
+                        </div>
+                        <span class="sharer-card-name">{{ sharer.name }}</span>
+                        <span class="sharer-card-action">Watch</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active stream viewer (subscribed to a sharer) -->
+            <div class="screen-share-area" data-if="viewing_sharer_id > 0">
+                <div class="screen-share-header">
+                    <div class="sharer-tabs">
+                        <div data-for="sharer : sharers">
+                            <div class="sharer-tab"
+                                 data-class-active="sharer.id == viewing_sharer_id"
+                                 data-event-click="select_sharer(sharer.id)">
+                                {{ sharer.name }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sharer-close" data-event-click="stop_watching">X</div>
+                </div>
+                <video_frame id="screen-share" />
+            </div>
+
+            <div class="text-placeholder" data-if="current_channel > 0 && someone_sharing == false">
+                <span class="text-muted-msg">Text chat coming soon</span>
+            </div>
+        </div>
+    </div>
+
+    </div><!-- /app-content -->
+
+    <!-- Login modal -->
+    <div class="modal-backdrop" data-model="serverlist" data-if="show_login">
+        <div class="modal-box">
+            <h1>Connect</h1>
+            <div class="subtitle">{{ login_status }}</div>
+
+            <div class="label">Username</div>
+            <input type="text" data-value="login_username" />
+
+            <div class="label">Password</div>
+            <input type="password" data-value="login_password" />
+
+            <div class="error-text" data-if="login_error != ''">{{ login_error }}</div>
+
+            <div class="btn" data-event-click="do_connect">Sign In</div>
+            <div class="btn btn-secondary" data-event-click="cancel_login">Cancel</div>
+        </div>
+    </div>
+
+    <!-- Add/Edit server modal -->
+    <div class="modal-backdrop" data-model="serverlist" data-if="show_add_form">
+        <div class="modal-box">
+            <h1 data-if="editing_id == 0">Add Server</h1>
+            <h1 data-if="editing_id > 0">Edit Server</h1>
+
+            <div class="label">Server Name</div>
+            <input type="text" data-value="edit_name" />
+
+            <div class="label">Host</div>
+            <input type="text" data-value="edit_host" />
+
+            <div class="label">Port</div>
+            <input type="text" data-value="edit_port" />
+
+            <div class="error-text" data-if="edit_error != ''">{{ edit_error }}</div>
+
+            <div class="btn" data-event-click="save_server">Save</div>
+            <div class="btn btn-secondary" data-event-click="cancel_edit">Cancel</div>
+        </div>
+    </div>
+
+    <!-- Context menu (right-click on server icon) -->
+    <div class="context-backdrop" data-model="serverlist" data-if="show_context_menu"
+         data-event-click="dismiss_context_menu">
+        <div id="server-context-menu" class="context-menu">
+            <div class="context-menu-item" data-event-click="context_edit">Edit</div>
+            <div class="context-menu-item context-menu-danger" data-event-click="context_delete">Delete</div>
+        </div>
+    </div>
+
+</body>
+</rml>

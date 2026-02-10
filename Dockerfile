@@ -1,0 +1,47 @@
+# ── Builder stage ──────────────────────────────────────────────
+FROM debian:bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config \
+    git curl zip unzip tar \
+    autoconf automake libtool \
+    python3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone vcpkg at the same commit as the project submodule
+ARG VCPKG_COMMIT=aa2d37682e3318d93aef87efa7b0e88e81cd3d59
+RUN git clone https://github.com/microsoft/vcpkg.git /opt/vcpkg \
+    && cd /opt/vcpkg \
+    && git checkout ${VCPKG_COMMIT} \
+    && ./bootstrap-vcpkg.sh -disableMetrics
+
+# Copy project source (vcpkg submodule excluded via .dockerignore)
+WORKDIR /src
+COPY . .
+
+# Symlink vcpkg into the source tree so CMakePresets paths resolve
+RUN ln -s /opt/vcpkg /src/vcpkg
+
+# Configure and build (server only, static libs)
+RUN cmake --preset linux-release \
+    && cmake --build build --config Release
+
+# ── Runtime stage ─────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/build/server/parties_server /usr/local/bin/parties_server
+
+# TLS control (TCP) + ENet data (UDP)
+EXPOSE 7800/tcp
+EXPOSE 7801/udp
+
+# /data holds server.toml, certs, and the SQLite database
+VOLUME /data
+WORKDIR /data
+
+ENTRYPOINT ["parties_server"]
