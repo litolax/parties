@@ -3,7 +3,7 @@
   "version-string": "0.1.0",
   "dependencies": [
     "argon2",
-    "enet",
+    "msquic",
     "opus",
     "sqlite3",
     "toml11",

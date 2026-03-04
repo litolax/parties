@@ -8,8 +8,7 @@ namespace parties::server {
 struct Config {
     std::string server_name    = "Parties Server";
     std::string listen_ip      = "0.0.0.0";
-    uint16_t    control_port   = 7800;
-    uint16_t    data_port      = 7801;
+    uint16_t    port           = 7800;
     int         max_clients    = 64;
     std::string server_password;
 

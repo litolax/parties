@@ -13,6 +13,7 @@
 #include <parties/video_common.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -104,17 +105,18 @@ private:
     std::string username_;
     std::string pending_password_;
     int role_ = 3;
-    EnetToken enet_token_{};
     std::string server_host_;
     uint16_t server_port_ = 7800;
-    uint16_t data_port_ = 7801;
     ChannelId current_channel_ = 0;
     ChannelKey channel_key_{};
-    uint64_t voice_nonce_counter_ = 0;
 
     // Auto-registration state
     bool pending_auto_register_ = false;
     int connecting_server_id_ = 0;
+
+    // PTT release delay
+    std::chrono::steady_clock::time_point ptt_release_time_{};
+    bool ptt_held_ = false;
 
     // Screen sharing state
     std::vector<CaptureTarget> capture_targets_;
@@ -123,7 +125,6 @@ private:
     std::unique_ptr<VideoDecoder> decoder_;
     std::unique_ptr<VideoElementInstancer> video_instancer_;
     bool sharing_screen_ = false;
-    uint64_t video_nonce_counter_ = 0;
     uint32_t video_frame_number_ = 0;
 
     // Multi-sharer tracking

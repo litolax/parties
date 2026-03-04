@@ -9,6 +9,11 @@
 
 #include <RmlUi/Core/Factory.h>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +21,36 @@
 #include <string>
 
 namespace parties::client {
+
+static std::string vk_to_name(int vk) {
+    switch (vk) {
+    case VK_LBUTTON:  return "Mouse1";
+    case VK_RBUTTON:  return "Mouse2";
+    case VK_MBUTTON:  return "Mouse3";
+    case VK_XBUTTON1: return "Mouse4";
+    case VK_XBUTTON2: return "Mouse5";
+    case VK_SPACE:    return "Space";
+    case VK_RETURN:   return "Enter";
+    case VK_TAB:      return "Tab";
+    case VK_BACK:     return "Backspace";
+    case VK_SHIFT:    return "Shift";
+    case VK_CONTROL:  return "Ctrl";
+    case VK_MENU:     return "Alt";
+    case VK_CAPITAL:  return "CapsLock";
+    case VK_LSHIFT:   return "LShift";
+    case VK_RSHIFT:   return "RShift";
+    case VK_LCONTROL: return "LCtrl";
+    case VK_RCONTROL: return "RCtrl";
+    case VK_LMENU:    return "LAlt";
+    case VK_RMENU:    return "RAlt";
+    default: {
+        UINT ch = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR);
+        if (ch > 0 && ch < 128)
+            return std::string(1, static_cast<char>(std::toupper(ch)));
+        return "Key " + std::to_string(vk);
+    }
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // App implementation
@@ -34,6 +69,7 @@ void App::setup_model_callbacks() {
     };
 
     model_.on_toggle_mute = [this]() {
+        if (model_.ptt_enabled) return;  // PTT controls mute state
         bool muted = !audio_.is_muted();
         audio_.set_muted(muted);
         model_.is_muted = muted;
@@ -90,6 +126,27 @@ void App::setup_model_callbacks() {
         settings_.set_pref("audio.vad_threshold", std::to_string(threshold));
     };
 
+    model_.on_toggle_ptt = [this]() {
+        model_.ptt_enabled = !model_.ptt_enabled;
+        model_.dirty("ptt_enabled");
+        settings_.set_pref("audio.ptt", model_.ptt_enabled ? "1" : "0");
+        if (model_.ptt_enabled) {
+            // PTT starts muted
+            audio_.set_muted(true);
+            model_.is_muted = true;
+            model_.dirty("is_muted");
+        }
+    };
+
+    model_.on_ptt_bind = [this]() {
+        model_.ptt_binding = true;
+        model_.dirty("ptt_binding");
+    };
+
+    model_.on_ptt_delay_changed = [this](float delay) {
+        settings_.set_pref("audio.ptt_delay", std::to_string(static_cast<int>(delay)));
+    };
+
     model_.on_toggle_share = [this]() {
         if (sharing_screen_)
             stop_screen_share();
@@ -132,7 +189,6 @@ void App::setup_server_model_callbacks() {
                 connecting_server_id_ = id;
                 server_host_ = srv.host;
                 server_port_ = static_cast<uint16_t>(srv.port);
-                data_port_ = server_port_ + 1;
 
                 server_model_.login_username = Rml::String(srv.last_username);
                 server_model_.login_password = Rml::String(srv.last_password);
@@ -194,7 +250,6 @@ void App::setup_server_model_callbacks() {
         // Disconnect if we were mid-connection
         if (net_.is_connected()) {
             net_.disconnect();
-            net_.disconnect_data();
         }
         pending_auto_register_ = false;
         pending_password_.clear();
@@ -307,6 +362,19 @@ bool App::init(HWND hwnd) {
             model_.vad_threshold = t;
         }
 
+        // Push-to-Talk
+        val = pref("audio.ptt");
+        if (!val.empty())
+            model_.ptt_enabled = (val != "0");
+        val = pref("audio.ptt_key");
+        if (!val.empty()) {
+            model_.ptt_key = std::stoi(val);
+            model_.ptt_key_name = Rml::String(vk_to_name(model_.ptt_key).c_str());
+        }
+        val = pref("audio.ptt_delay");
+        if (!val.empty())
+            model_.ptt_delay = static_cast<float>(std::stoi(val));
+
         // Find saved device by name
         val = pref("audio.capture_device");
         if (!val.empty()) {
@@ -330,66 +398,36 @@ bool App::init(HWND hwnd) {
         }
     }
 
-    // Wire audio to network (encrypt with ChaCha20-Poly1305)
+    // Wire audio to network (QUIC TLS encrypts in transit)
     audio_.set_mixer(&mixer_);
     audio_.set_sound_player(&sound_player_);
     audio_.on_encoded_frame = [this](const uint8_t* data, size_t len) {
         if (!authenticated_ || current_channel_ == 0) return;
 
-        // Build nonce: [user_id(4)][counter(8)]
-        uint8_t nonce[12];
-        std::memcpy(nonce, &user_id_, 4);
-        std::memcpy(nonce + 4, &voice_nonce_counter_, 8);
-        voice_nonce_counter_++;
-
-        // AAD = user_id (4 bytes)
-        uint8_t aad[4];
-        std::memcpy(aad, &user_id_, 4);
-
-        // Packet: [type(1)][nonce(12)][tag(16)][ciphertext(len)]
-        std::vector<uint8_t> pkt(1 + 12 + 16 + len);
+        // Packet: [type(1)][opus_data(N)]
+        std::vector<uint8_t> pkt(1 + len);
         pkt[0] = parties::protocol::VOICE_PACKET_TYPE;
-        std::memcpy(pkt.data() + 1, nonce, 12);
-        if (!parties::voice_encrypt(channel_key_.data(), nonce, aad, 4,
-                                    data, len,
-                                    pkt.data() + 29,    // ciphertext
-                                    pkt.data() + 13)) { // tag
-            return;
-        }
+        std::memcpy(pkt.data() + 1, data, len);
         net_.send_data(pkt.data(), pkt.size());
     };
 
-    // Wire ENet data receive -> voice mixer / video decoder (decrypt with ChaCha20-Poly1305)
+    // Wire data receive -> voice mixer / video decoder
     net_.on_data_received = [this](const uint8_t* data, size_t len) {
         if (len < 1) return;
         uint8_t type = data[0];
 
         if (type == parties::protocol::VOICE_PACKET_TYPE) {
-            // Format: [type(1)][sender_id(4)][nonce(12)][tag(16)][ciphertext(N)]
-            if (len < 33) return;
+            // Format: [type(1)][sender_id(4)][opus_data(N)] — QUIC TLS encrypts in transit
+            if (len < 6) return;
             uint32_t sender_id;
             std::memcpy(&sender_id, data + 1, 4);
             if (sender_id == user_id_) return;
 
-            const uint8_t* nonce = data + 5;
-            const uint8_t* tag = data + 17;
-            const uint8_t* ciphertext = data + 33;
-            size_t ct_len = len - 33;
-
-            uint8_t aad[4];
-            std::memcpy(aad, &sender_id, 4);
-
-            std::vector<uint8_t> plaintext(ct_len);
-            if (!parties::voice_decrypt(channel_key_.data(), nonce, aad, 4,
-                                        ciphertext, ct_len, tag,
-                                        plaintext.data())) {
-                return;
-            }
-            mixer_.push_packet(sender_id, plaintext.data(), plaintext.size());
+            mixer_.push_packet(sender_id, data + 5, len - 5);
         }
         else if (type == parties::protocol::VIDEO_FRAME_PACKET_TYPE) {
-            // Format: [type(1)][sender_id(4)][nonce(12)][tag(16)][ciphertext(N)]
-            if (len < 33) return;
+            // Format: [type(1)][sender_id(4)][frame_number(4)][timestamp(4)][flags(1)][w(2)][h(2)][codec(1)][data(N)]
+            if (len < 19) return;  // 1 + 4 + 14 minimum
             uint32_t sender_id;
             std::memcpy(&sender_id, data + 1, 4);
             if (sender_id == user_id_) return;
@@ -410,13 +448,11 @@ bool App::init(HWND hwnd) {
         if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
         capture_targets_.clear();
         clear_all_sharers();
-        video_nonce_counter_ = 0;
         video_frame_number_ = 0;
 
         authenticated_ = false;
         current_channel_ = 0;
         channel_key_ = {};
-        voice_nonce_counter_ = 0;
         pending_auto_register_ = false;
         pending_password_.clear();
         audio_.stop();
@@ -473,7 +509,6 @@ void App::shutdown() {
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
     audio_.shutdown();
     net_.disconnect();
-    net_.disconnect_data();
     ui_.shutdown();
     settings_.close();
 }
@@ -483,8 +518,61 @@ void App::update() {
     if (net_.is_connected())
         process_server_messages();
 
-    // Service ENet (video packets go to decode thread queue, not decoded here)
-    net_.service_enet(0);
+    // PTT keybind capture (scan for any key press)
+    if (model_.ptt_binding) {
+        for (int vk = 1; vk < 256; vk++) {
+            if (vk == VK_ESCAPE) {
+                if (GetAsyncKeyState(vk) & 0x8000) {
+                    model_.ptt_binding = false;
+                    model_.dirty("ptt_binding");
+                    break;
+                }
+                continue;
+            }
+            if (GetAsyncKeyState(vk) & 0x8000) {
+                model_.ptt_key = vk;
+                model_.ptt_key_name = Rml::String(vk_to_name(vk).c_str());
+                model_.ptt_binding = false;
+                model_.dirty("ptt_key");
+                model_.dirty("ptt_key_name");
+                model_.dirty("ptt_binding");
+                settings_.set_pref("audio.ptt_key", std::to_string(vk));
+                break;
+            }
+        }
+    }
+
+    // PTT polling — hold key to unmute, release to mute (with optional delay)
+    if (model_.ptt_enabled && model_.ptt_key != 0 && current_channel_ != 0) {
+        bool held = (GetAsyncKeyState(model_.ptt_key) & 0x8000) != 0;
+        auto now = std::chrono::steady_clock::now();
+
+        if (held) {
+            ptt_held_ = true;
+            if (audio_.is_muted()) {
+                audio_.set_muted(false);
+                model_.is_muted = false;
+                model_.dirty("is_muted");
+            }
+        } else if (ptt_held_) {
+            // Key just released — start delay timer
+            ptt_held_ = false;
+            ptt_release_time_ = now;
+        }
+
+        // Apply mute after delay expires
+        if (!ptt_held_ && !audio_.is_muted()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - ptt_release_time_).count();
+            if (elapsed >= static_cast<int64_t>(model_.ptt_delay)) {
+                audio_.set_muted(true);
+                model_.is_muted = true;
+                model_.dirty("is_muted");
+            }
+        }
+    }
+
+    // QUIC datagrams are received via callbacks — no polling needed
 
     // Deliver latest decoded video frame via DComp video surface
     if (new_frame_available_ && doc_) {
@@ -642,7 +730,7 @@ void App::do_connect() {
 // ═══════════════════════════════════════════════════════════════════════
 
 void App::join_channel(ChannelId id) {
-    if (!authenticated_) return;
+    if (!authenticated_ || id == current_channel_) return;
 
     BinaryWriter writer;
     writer.write_u32(id);
@@ -673,7 +761,6 @@ void App::leave_channel() {
     net_.send_message(protocol::ControlMessageType::CHANNEL_LEAVE, nullptr, 0);
     current_channel_ = 0;
     channel_key_ = {};
-    voice_nonce_counter_ = 0;
     sound_player_.play(SoundPlayer::Effect::LeaveChannel);
     audio_.stop();
     mixer_.clear();
@@ -740,10 +827,8 @@ void App::on_auth_response(const uint8_t* data, size_t len) {
     BinaryReader reader(data, len);
     user_id_ = reader.read_u32();
 
-    uint8_t session_token[32], enet_tok[32];
+    uint8_t session_token[32];
     reader.read_bytes(session_token, 32);
-    reader.read_bytes(enet_tok, 32);
-    std::memcpy(enet_token_.data(), enet_tok, 32);
 
     role_ = reader.read_u8();
     std::string server_name = reader.read_string();
@@ -757,8 +842,7 @@ void App::on_auth_response(const uint8_t* data, size_t len) {
     pending_password_.clear();
     refresh_server_list();
 
-    // Connect ENet data plane
-    net_.connect_data(server_host_, data_port_, enet_token_);
+    // QUIC data plane is already connected (single connection)
 
     // Update model and switch to connected state
     model_.server_name = Rml::String(server_name);
@@ -938,7 +1022,6 @@ void App::on_channel_key(const uint8_t* data, size_t len) {
     ChannelId ch_id = reader.read_u32();
     if (reader.remaining() < 32 || reader.error()) return;
     reader.read_bytes(channel_key_.data(), 32);
-    voice_nonce_counter_ = 0;
 }
 
 void App::on_server_error(const uint8_t* data, size_t len) {
@@ -1058,7 +1141,6 @@ void App::start_screen_share(int target_index) {
         return;
     }
 
-    video_nonce_counter_ = 0;
     video_frame_number_ = 0;
 
     // Wire capture -> encoder (only encodes when sharing_screen_ is true)
@@ -1068,12 +1150,11 @@ void App::start_screen_share(int target_index) {
         encoder_->encode_frame(texture, ts);
     };
 
-    // Wire encoder -> encrypted network send
+    // Wire encoder -> network send (QUIC TLS encrypts in transit)
     encoder_->on_encoded = [this](const uint8_t* data, size_t len, bool keyframe) {
         if (!sharing_screen_ || !authenticated_) return;
 
-        // Build plaintext payload:
-        // [frame_number(4)][timestamp(4)][flags(1)][width(2)][height(2)][codec_id(1)][data(N)]
+        // Packet: [type(1)][frame_number(4)][timestamp(4)][flags(1)][width(2)][height(2)][codec_id(1)][data(N)]
         uint32_t fn = video_frame_number_++;
         uint32_t ts = fn;
         uint8_t flags = keyframe ? VIDEO_FLAG_KEYFRAME : 0;
@@ -1081,38 +1162,19 @@ void App::start_screen_share(int target_index) {
         uint16_t h = static_cast<uint16_t>(encoder_->height());
         uint8_t codec = static_cast<uint8_t>(encoder_->codec());
 
-        size_t payload_len = 4 + 4 + 1 + 2 + 2 + 1 + len;
-        std::vector<uint8_t> plaintext(payload_len);
+        size_t header_len = 1 + 4 + 4 + 1 + 2 + 2 + 1;
+        std::vector<uint8_t> pkt(header_len + len);
         size_t off = 0;
-        std::memcpy(plaintext.data() + off, &fn, 4); off += 4;
-        std::memcpy(plaintext.data() + off, &ts, 4); off += 4;
-        plaintext[off++] = flags;
-        std::memcpy(plaintext.data() + off, &w, 2); off += 2;
-        std::memcpy(plaintext.data() + off, &h, 2); off += 2;
-        plaintext[off++] = codec;
-        std::memcpy(plaintext.data() + off, data, len);
+        pkt[off++] = protocol::VIDEO_FRAME_PACKET_TYPE;
+        std::memcpy(pkt.data() + off, &fn, 4); off += 4;
+        std::memcpy(pkt.data() + off, &ts, 4); off += 4;
+        pkt[off++] = flags;
+        std::memcpy(pkt.data() + off, &w, 2); off += 2;
+        std::memcpy(pkt.data() + off, &h, 2); off += 2;
+        pkt[off++] = codec;
+        std::memcpy(pkt.data() + off, data, len);
 
-        // Encrypt with ChaCha20-Poly1305 (video nonce space)
-        uint64_t counter = VIDEO_NONCE_HIGH_BIT | video_nonce_counter_++;
-        uint8_t nonce[12];
-        std::memcpy(nonce, &user_id_, 4);
-        std::memcpy(nonce + 4, &counter, 8);
-
-        uint8_t aad[4];
-        std::memcpy(aad, &user_id_, 4);
-
-        // Packet: [type(1)][nonce(12)][tag(16)][ciphertext]
-        std::vector<uint8_t> pkt(1 + 12 + 16 + payload_len);
-        pkt[0] = protocol::VIDEO_FRAME_PACKET_TYPE;
-        std::memcpy(pkt.data() + 1, nonce, 12);
-        if (!parties::voice_encrypt(channel_key_.data(), nonce, aad, 4,
-                                    plaintext.data(), payload_len,
-                                    pkt.data() + 29,    // ciphertext
-                                    pkt.data() + 13)) { // tag
-            return;
-        }
-
-        net_.send_video(pkt.data(), pkt.size(), true);  // always reliable — avoids OBU errors from lost UDP fragments
+        net_.send_video(pkt.data(), pkt.size(), true);
 
         // Feed raw bitstream to local preview decoder (no encryption needed)
         if (decoder_ && viewing_sharer_ == user_id_) {
@@ -1151,7 +1213,6 @@ void App::stop_screen_share() {
 
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
-    video_nonce_counter_ = 0;
     video_frame_number_ = 0;
 
     // Remove self from active sharers
@@ -1167,34 +1228,16 @@ void App::stop_screen_share() {
 }
 
 void App::on_video_frame_received(uint32_t sender_id, const uint8_t* data, size_t len) {
-    // data = nonce(12) + tag(16) + ciphertext(N)
-    if (len < 28) { return; }
-    if (sender_id != viewing_sharer_) { return; }
-
-    const uint8_t* nonce = data;
-    const uint8_t* tag = data + 12;
-    const uint8_t* ciphertext = data + 28;
-    size_t ct_len = len - 28;
-
-    uint8_t aad[4];
-    std::memcpy(aad, &sender_id, 4);
-
-    std::vector<uint8_t> plaintext(ct_len);
-    if (!parties::voice_decrypt(channel_key_.data(), nonce, aad, 4,
-                                ciphertext, ct_len, tag,
-                                plaintext.data())) {
-        return;
-    }
-
-    // Parse: [frame_number(4)][timestamp(4)][flags(1)][width(2)][height(2)][codec_id(1)][data(N)]
-    if (plaintext.size() < 14) return;
+    // data = [frame_number(4)][timestamp(4)][flags(1)][width(2)][height(2)][codec_id(1)][encoded(N)]
+    if (len < 14) return;
+    if (sender_id != viewing_sharer_) return;
 
     uint32_t frame_number;
-    std::memcpy(&frame_number, plaintext.data(), 4);
+    std::memcpy(&frame_number, data, 4);
     int64_t timestamp = static_cast<int64_t>(frame_number);
 
-    const uint8_t* encoded = plaintext.data() + 14;
-    size_t encoded_len = plaintext.size() - 14;
+    const uint8_t* encoded = data + 14;
+    size_t encoded_len = len - 14;
 
     if (decode_running_ && encoded_len > 0) {
         DecodeWork work;
@@ -1203,7 +1246,6 @@ void App::on_video_frame_received(uint32_t sender_id, const uint8_t* data, size_
 
         {
             std::lock_guard<std::mutex> lock(decode_queue_mutex_);
-            // Never drop frames — AV1 inter-prediction needs every frame
             decode_queue_.push(std::move(work));
         }
         decode_queue_cv_.notify_one();
@@ -1278,7 +1320,6 @@ void App::on_screen_share_stopped(const uint8_t* data, size_t len) {
         sharing_screen_ = false;
         if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
         if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
-        video_nonce_counter_ = 0;
         video_frame_number_ = 0;
         model_.is_sharing = false;
         model_.dirty("is_sharing");
@@ -1312,7 +1353,6 @@ void App::on_screen_share_denied(const uint8_t* data, size_t len) {
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     capture_targets_.clear();
-    video_nonce_counter_ = 0;
     video_frame_number_ = 0;
 }
 

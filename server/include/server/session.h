@@ -1,22 +1,22 @@
 #pragma once
 
 #include <parties/types.h>
-#include <parties/protocol.h>
 
 #include <string>
 #include <cstdint>
 #include <atomic>
-#include <mutex>
-#include <vector>
 
-struct WOLFSSL;
+typedef struct QUIC_HANDLE *HQUIC;
 
 namespace parties::server {
 
 struct Session {
-    uint32_t         id = 0;             // Internal session ID (assigned by TLS server)
-    WOLFSSL*         ssl = nullptr;      // TLS connection
-    int              socket_fd = -1;     // Underlying TCP socket
+    uint32_t         id = 0;             // Internal session ID
+
+    // QUIC transport
+    HQUIC            quic_connection = nullptr;      // QUIC connection handle
+    HQUIC            quic_control_stream = nullptr;  // Bidirectional control stream
+    HQUIC            quic_video_stream = nullptr;    // Bidirectional video stream
 
     // Authenticated state (set after AUTH_RESPONSE)
     bool             authenticated = false;
@@ -24,7 +24,6 @@ struct Session {
     std::string      username;
     int              role = 3;           // Default: User
     SessionToken     session_token{};
-    EnetToken        enet_token{};
 
     // Voice state
     ChannelId        channel_id = 0;     // 0 = not in a channel
@@ -41,11 +40,6 @@ struct Session {
 
     // Connection state
     std::atomic<bool> alive{true};
-
-    // Thread-safe send over TLS
-    std::mutex       write_mutex;
-    bool send(const uint8_t* data, size_t len);
-    bool send_message(protocol::ControlMessageType type, const uint8_t* payload, size_t payload_len);
 };
 
 } // namespace parties::server

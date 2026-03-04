@@ -1,6 +1,7 @@
 #include <parties/version.h>
 #include <parties/crypto.h>
 #include <parties/net_common.h>
+#include <parties/quic_common.h>
 #include <server/config.h>
 #include <server/server.h>
 
@@ -28,14 +29,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!parties::quic_init()) {
+        std::fprintf(stderr, "Failed to initialize QUIC\n");
+        parties::net_cleanup();
+        parties::crypto_cleanup();
+        return 1;
+    }
+
     // Load config
     std::string config_path = "server.toml";
     if (argc > 1) config_path = argv[1];
 
     auto config = parties::server::Config::load(config_path);
     std::printf("Server name: %s\n", config.server_name.c_str());
-    std::printf("Control port: %u, Data port: %u\n",
-                config.control_port, config.data_port);
+    std::printf("QUIC port: %u\n", config.port);
 
     // Start server
     parties::server::Server server;
@@ -58,6 +65,7 @@ int main(int argc, char* argv[]) {
     }
 
     server.stop();
+    parties::quic_cleanup();
     parties::net_cleanup();
     parties::crypto_cleanup();
     return 0;

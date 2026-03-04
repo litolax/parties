@@ -7,9 +7,11 @@
 #include <parties/permissions.h>
 #include <parties/video_common.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 
 namespace parties::server {
 
@@ -50,25 +52,15 @@ bool Server::start(const Config& cfg) {
                     config_.cert_file.c_str(), config_.key_file.c_str());
     }
 
-    // Start TLS control plane
-    if (!tls_.start(config_.listen_ip, config_.control_port,
-                    config_.cert_file, config_.key_file)) {
+    // Start QUIC transport (unified control + data plane)
+    if (!quic_.start(config_.listen_ip, config_.port,
+                     static_cast<size_t>(config_.max_clients),
+                     config_.cert_file, config_.key_file)) {
         return false;
     }
 
-    tls_.on_disconnect = [this](uint32_t session_id) {
+    quic_.on_disconnect = [this](uint32_t session_id) {
         on_client_disconnect(session_id);
-    };
-
-    // Start ENet data plane
-    if (!enet_.start(config_.listen_ip, config_.data_port,
-                     static_cast<size_t>(config_.max_clients))) {
-        tls_.stop();
-        return false;
-    }
-
-    enet_.on_disconnect = [this](uint32_t session_id) {
-        std::printf("[Server] ENet peer for session %u disconnected\n", session_id);
     };
 
     running_ = true;
@@ -80,30 +72,29 @@ void Server::run() {
     while (running_) {
         process_control_messages();
         process_data_packets();
-        enet_.service(5);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
 void Server::stop() {
     if (!running_) return;
     running_ = false;
-    enet_.stop();
-    tls_.stop();
+    quic_.stop();
     db_.close();
     std::printf("[Server] Stopped\n");
 }
 
 void Server::process_control_messages() {
-    auto messages = tls_.incoming().drain();
+    auto messages = quic_.incoming().drain();
     for (auto& msg : messages)
         handle_message(msg);
 }
 
 void Server::process_data_packets() {
-    auto packets = enet_.incoming().drain();
+    auto packets = quic_.data_incoming().drain();
     for (auto& pkt : packets) {
         if (pkt.packet_type == protocol::VOICE_PACKET_TYPE) {
-            auto session = tls_.get_session(pkt.session_id);
+            auto session = quic_.get_session(pkt.session_id);
             if (!session || !session->authenticated || session->channel_id == 0)
                 continue;
 
@@ -116,7 +107,7 @@ void Server::process_data_packets() {
                        reinterpret_cast<uint8_t*>(&uid) + 4);
             fwd.insert(fwd.end(), pkt.data.begin(), pkt.data.end());
 
-            auto all_sessions = tls_.get_sessions();
+            auto all_sessions = quic_.get_sessions();
             std::vector<uint32_t> targets;
             for (auto& s : all_sessions) {
                 if (s->id != pkt.session_id &&
@@ -127,7 +118,7 @@ void Server::process_data_packets() {
                 }
             }
             if (!targets.empty())
-                enet_.send_to_many(targets, fwd.data(), fwd.size());
+                quic_.send_to_many(targets, fwd.data(), fwd.size());
         }
         else if (pkt.packet_type == protocol::VIDEO_FRAME_PACKET_TYPE) {
             forward_video_frame(pkt);
@@ -141,7 +132,7 @@ void Server::process_data_packets() {
 void Server::send_error(uint32_t session_id, const std::string& message) {
     BinaryWriter writer;
     writer.write_string(message);
-    tls_.send_to(session_id, protocol::ControlMessageType::SERVER_ERROR,
+    quic_.send_to(session_id, protocol::ControlMessageType::SERVER_ERROR,
                  writer.data().data(), writer.data().size());
 }
 
@@ -158,7 +149,7 @@ void Server::send_channel_list(uint32_t session_id) {
 
         // Count users currently in this channel
         uint32_t user_count = 0;
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->authenticated && s->channel_id == ch.id)
                 user_count++;
@@ -166,12 +157,12 @@ void Server::send_channel_list(uint32_t session_id) {
         writer.write_u32(user_count);
     }
 
-    tls_.send_to(session_id, protocol::ControlMessageType::CHANNEL_LIST,
+    quic_.send_to(session_id, protocol::ControlMessageType::CHANNEL_LIST,
                  writer.data().data(), writer.data().size());
 }
 
 void Server::handle_message(const IncomingMessage& msg) {
-    auto session = tls_.get_session(msg.session_id);
+    auto session = quic_.get_session(msg.session_id);
     if (!session) return;
 
     switch (msg.type) {
@@ -219,20 +210,17 @@ void Server::handle_message(const IncomingMessage& msg) {
 
         db_.update_last_login(user->id);
 
-        // Generate tokens
+        // Generate session token
         parties::random_bytes(session->session_token.data(), session->session_token.size());
-        parties::random_bytes(session->enet_token.data(), session->enet_token.size());
-        enet_.bind_token(session->enet_token, session->id);
 
-        // Send AUTH_RESPONSE: [user_id][session_token(32)][enet_token(32)][role][server_name]
+        // Send AUTH_RESPONSE: [user_id][session_token(32)][role][server_name]
         BinaryWriter writer;
         writer.write_u32(session->user_id);
         writer.write_bytes(session->session_token.data(), session->session_token.size());
-        writer.write_bytes(session->enet_token.data(), session->enet_token.size());
         writer.write_u8(static_cast<uint8_t>(session->role));
         writer.write_string(config_.server_name);
 
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::AUTH_RESPONSE,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::AUTH_RESPONSE,
                      writer.data().data(), writer.data().size());
 
         // Send channel list immediately after auth
@@ -295,14 +283,14 @@ void Server::handle_message(const IncomingMessage& msg) {
         BinaryWriter writer;
         writer.write_u8(1); // success
         writer.write_string("Registration successful");
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::REGISTER_RESPONSE,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::REGISTER_RESPONSE,
                      writer.data().data(), writer.data().size());
         break;
     }
 
     // ── Keepalive ───────────────────────────────────────────────────────
     case protocol::ControlMessageType::KEEPALIVE_PING: {
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::KEEPALIVE_PONG,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::KEEPALIVE_PONG,
                      nullptr, 0);
         break;
     }
@@ -334,7 +322,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         int max = channel->max_users > 0 ? channel->max_users : config_.max_users_per_channel;
         if (max > 0) {
             uint32_t count = 0;
-            auto all = tls_.get_sessions();
+            auto all = quic_.get_sessions();
             for (auto& s : all) {
                 if (s->authenticated && s->channel_id == channel_id)
                     count++;
@@ -353,10 +341,10 @@ void Server::handle_message(const IncomingMessage& msg) {
             BinaryWriter leave_writer;
             leave_writer.write_u32(session->user_id);
             leave_writer.write_u32(old_channel);
-            auto all = tls_.get_sessions();
+            auto all = quic_.get_sessions();
             for (auto& s : all) {
                 if (s->authenticated && s->channel_id == old_channel)
-                    s->send_message(protocol::ControlMessageType::USER_LEFT_CHANNEL,
+                    quic_.send_to(s->id, protocol::ControlMessageType::USER_LEFT_CHANNEL,
                                    leave_writer.data().data(), leave_writer.data().size());
             }
         }
@@ -367,7 +355,7 @@ void Server::handle_message(const IncomingMessage& msg) {
 
         // Send user list for the channel
         {
-            auto all = tls_.get_sessions();
+            auto all = quic_.get_sessions();
             BinaryWriter list_writer;
             // Count users in channel
             uint32_t count = 0;
@@ -386,7 +374,7 @@ void Server::handle_message(const IncomingMessage& msg) {
                     list_writer.write_u8(s->deafened ? 1 : 0);
                 }
             }
-            tls_.send_to(msg.session_id, protocol::ControlMessageType::CHANNEL_USER_LIST,
+            quic_.send_to(msg.session_id, protocol::ControlMessageType::CHANNEL_USER_LIST,
                          list_writer.data().data(), list_writer.data().size());
         }
 
@@ -397,7 +385,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         {
             auto ss_it = channel_screen_sharers_.find(channel_id);
             if (ss_it != channel_screen_sharers_.end()) {
-                auto all2 = tls_.get_sessions();
+                auto all2 = quic_.get_sessions();
                 for (UserId sharer_id : ss_it->second) {
                     for (auto& s : all2) {
                         if (s->user_id == sharer_id && s->authenticated) {
@@ -406,7 +394,7 @@ void Server::handle_message(const IncomingMessage& msg) {
                             ss_writer.write_u8(s->share_codec);
                             ss_writer.write_u16(s->share_width);
                             ss_writer.write_u16(s->share_height);
-                            tls_.send_to(msg.session_id,
+                            quic_.send_to(msg.session_id,
                                          protocol::ControlMessageType::SCREEN_SHARE_STARTED,
                                          ss_writer.data().data(), ss_writer.data().size());
                             break;
@@ -423,12 +411,12 @@ void Server::handle_message(const IncomingMessage& msg) {
             join_writer.write_string(session->username);
             join_writer.write_u32(channel_id);
 
-            auto all = tls_.get_sessions();
+            auto all = quic_.get_sessions();
             for (auto& s : all) {
                 if (s->id != msg.session_id &&
                     s->authenticated &&
                     s->channel_id == channel_id) {
-                    s->send_message(protocol::ControlMessageType::USER_JOINED_CHANNEL,
+                    quic_.send_to(s->id, protocol::ControlMessageType::USER_JOINED_CHANNEL,
                                    join_writer.data().data(), join_writer.data().size());
                 }
             }
@@ -449,10 +437,10 @@ void Server::handle_message(const IncomingMessage& msg) {
         writer.write_u32(session->user_id);
         writer.write_u32(old_channel);
 
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->authenticated && s->channel_id == old_channel)
-                s->send_message(protocol::ControlMessageType::USER_LEFT_CHANNEL,
+                quic_.send_to(s->id, protocol::ControlMessageType::USER_LEFT_CHANNEL,
                                writer.data().data(), writer.data().size());
         }
         break;
@@ -482,7 +470,7 @@ void Server::handle_message(const IncomingMessage& msg) {
                     name.c_str(), session->username.c_str());
 
         // Broadcast updated channel list to all authenticated clients
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->authenticated)
                 send_channel_list(s->id);
@@ -491,7 +479,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         BinaryWriter writer;
         writer.write_u8(1);
         writer.write_string("Channel created");
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
                      writer.data().data(), writer.data().size());
         break;
     }
@@ -511,14 +499,14 @@ void Server::handle_message(const IncomingMessage& msg) {
         if (reader.error()) break;
 
         // Kick everyone from the channel first
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->authenticated && s->channel_id == channel_id) {
                 s->channel_id = 0;
                 BinaryWriter leave_writer;
                 leave_writer.write_u32(s->user_id);
                 leave_writer.write_u32(channel_id);
-                s->send_message(protocol::ControlMessageType::USER_LEFT_CHANNEL,
+                quic_.send_to(s->id, protocol::ControlMessageType::USER_LEFT_CHANNEL,
                                leave_writer.data().data(), leave_writer.data().size());
             }
         }
@@ -537,7 +525,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         BinaryWriter writer;
         writer.write_u8(1);
         writer.write_string("Channel deleted");
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
                      writer.data().data(), writer.data().size());
         break;
     }
@@ -580,7 +568,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         db_.set_user_role(target_id, target_new_role);
 
         // Update live session if online
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->user_id == target_id)
                 s->role = new_role;
@@ -589,7 +577,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         BinaryWriter writer;
         writer.write_u8(1);
         writer.write_string("Role updated");
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
                      writer.data().data(), writer.data().size());
         break;
     }
@@ -609,7 +597,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         if (reader.error()) break;
 
         // Find target session
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->user_id == target_id && s->authenticated) {
                 if (!can_moderate(user_role, static_cast<Role>(s->role))) {
@@ -617,15 +605,14 @@ void Server::handle_message(const IncomingMessage& msg) {
                     break;
                 }
                 send_error(s->id, "You have been kicked from the server");
-                tls_.disconnect(s->id);
-                enet_.unbind_session(s->id);
+                quic_.disconnect(s->id);
             }
         }
 
         BinaryWriter writer;
         writer.write_u8(1);
         writer.write_string("User kicked");
-        tls_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
+        quic_.send_to(msg.session_id, protocol::ControlMessageType::ADMIN_RESULT,
                      writer.data().data(), writer.data().size());
         break;
     }
@@ -655,10 +642,10 @@ void Server::handle_message(const IncomingMessage& msg) {
         writer.write_u16(width);
         writer.write_u16(height);
 
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->authenticated && s->channel_id == ch) {
-                s->send_message(protocol::ControlMessageType::SCREEN_SHARE_STARTED,
+                quic_.send_to(s->id, protocol::ControlMessageType::SCREEN_SHARE_STARTED,
                                writer.data().data(), writer.data().size());
             }
         }
@@ -691,6 +678,22 @@ void Server::handle_message(const IncomingMessage& msg) {
             if (it != channel_screen_sharers_.end() &&
                 it->second.count(target_id)) {
                 session->subscribed_sharer = target_id;
+
+                // Auto-PLI: tell the sharer to send a keyframe so the new viewer
+                // can decode from the Sequence Header
+                auto all = quic_.get_sessions();
+                for (auto& s : all) {
+                    if (s->user_id == target_id && s->authenticated) {
+                        std::vector<uint8_t> pli;
+                        pli.push_back(protocol::VIDEO_CONTROL_TYPE);
+                        pli.push_back(protocol::VIDEO_CTL_PLI);
+                        uint32_t requester_id = session->user_id;
+                        pli.insert(pli.end(), reinterpret_cast<uint8_t*>(&requester_id),
+                                   reinterpret_cast<uint8_t*>(&requester_id) + 4);
+                        quic_.send_datagram(s->id, pli.data(), pli.size());
+                        break;
+                    }
+                }
             }
         }
         break;
@@ -704,7 +707,7 @@ void Server::handle_message(const IncomingMessage& msg) {
 }
 
 void Server::on_client_disconnect(uint32_t session_id) {
-    auto session = tls_.get_session(session_id);
+    auto session = quic_.get_session(session_id);
     if (session && session->authenticated && session->channel_id != 0) {
         // Clean up screen share if this user was sharing
         stop_screen_share(session->channel_id, session->user_id);
@@ -714,22 +717,20 @@ void Server::on_client_disconnect(uint32_t session_id) {
         writer.write_u32(session->user_id);
         writer.write_u32(session->channel_id);
 
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->id != session_id &&
                 s->authenticated &&
                 s->channel_id == session->channel_id) {
-                s->send_message(protocol::ControlMessageType::USER_LEFT_CHANNEL,
+                quic_.send_to(s->id, protocol::ControlMessageType::USER_LEFT_CHANNEL,
                                writer.data().data(), writer.data().size());
             }
         }
     }
-
-    enet_.unbind_session(session_id);
 }
 
 void Server::forward_video_frame(const DataPacket& pkt) {
-    auto session = tls_.get_session(pkt.session_id);
+    auto session = quic_.get_session(pkt.session_id);
     if (!session || !session->authenticated || session->channel_id == 0)
         return;
 
@@ -748,28 +749,20 @@ void Server::forward_video_frame(const DataPacket& pkt) {
                reinterpret_cast<uint8_t*>(&uid) + 4);
     fwd.insert(fwd.end(), pkt.data.begin(), pkt.data.end());
 
-    // Mirror the sender's reliability mode
-    enet_uint32 flags = pkt.reliable ? ENET_PACKET_FLAG_RELIABLE
-                                     : ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
-
-    // Only forward to viewers subscribed to this sharer
-    auto all_sessions = tls_.get_sessions();
-    std::vector<uint32_t> targets;
+    // Forward to viewers subscribed to this sharer via video stream
+    auto all_sessions = quic_.get_sessions();
     for (auto& s : all_sessions) {
         if (s->id != pkt.session_id &&
             s->authenticated &&
             s->channel_id == session->channel_id &&
             s->subscribed_sharer == session->user_id) {
-            targets.push_back(s->id);
+            quic_.send_video_to(s->id, fwd.data(), fwd.size());
         }
     }
-    if (!targets.empty())
-        enet_.send_to_many_on_channel(targets, protocol::ENET_CHANNEL_VIDEO,
-                                       fwd.data(), fwd.size(), flags);
 }
 
 void Server::handle_video_control(const DataPacket& pkt) {
-    auto session = tls_.get_session(pkt.session_id);
+    auto session = quic_.get_session(pkt.session_id);
     if (!session || !session->authenticated || session->channel_id == 0)
         return;
 
@@ -789,7 +782,7 @@ void Server::handle_video_control(const DataPacket& pkt) {
             return;
 
         // Forward PLI to the target sharer's session
-        auto all = tls_.get_sessions();
+        auto all = quic_.get_sessions();
         for (auto& s : all) {
             if (s->user_id == target_id && s->authenticated) {
                 std::vector<uint8_t> fwd;
@@ -798,9 +791,7 @@ void Server::handle_video_control(const DataPacket& pkt) {
                 uint32_t requester_id = session->user_id;
                 fwd.insert(fwd.end(), reinterpret_cast<uint8_t*>(&requester_id),
                            reinterpret_cast<uint8_t*>(&requester_id) + 4);
-                enet_.send_to_on_channel(s->id, protocol::ENET_CHANNEL_VIDEO,
-                                          fwd.data(), fwd.size(),
-                                          ENET_PACKET_FLAG_RELIABLE);
+                quic_.send_datagram(s->id, fwd.data(), fwd.size());
                 break;
             }
         }
@@ -815,7 +806,7 @@ void Server::stop_screen_share(ChannelId channel_id, UserId user_id) {
         channel_screen_sharers_.erase(it);
 
     // Clear subscriptions pointing to this sharer
-    auto all = tls_.get_sessions();
+    auto all = quic_.get_sessions();
     for (auto& s : all) {
         if (s->subscribed_sharer == user_id)
             s->subscribed_sharer = 0;
@@ -827,7 +818,7 @@ void Server::stop_screen_share(ChannelId channel_id, UserId user_id) {
 
     for (auto& s : all) {
         if (s->authenticated && s->channel_id == channel_id) {
-            s->send_message(protocol::ControlMessageType::SCREEN_SHARE_STOPPED,
+            quic_.send_to(s->id, protocol::ControlMessageType::SCREEN_SHARE_STOPPED,
                            writer.data().data(), writer.data().size());
         }
     }
@@ -849,7 +840,7 @@ void Server::send_channel_key(uint32_t session_id, ChannelId channel_id) {
     BinaryWriter writer;
     writer.write_u32(channel_id);
     writer.write_bytes(it->second.data(), 32);
-    tls_.send_to(session_id, protocol::ControlMessageType::CHANNEL_KEY,
+    quic_.send_to(session_id, protocol::ControlMessageType::CHANNEL_KEY,
                  writer.data().data(), writer.data().size());
 }
 

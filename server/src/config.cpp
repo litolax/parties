@@ -27,8 +27,7 @@ Config Config::load(const std::string& toml_path) {
         auto& s = data.at("server");
         cfg.server_name    = toml::find_or(s, "name", cfg.server_name);
         cfg.listen_ip      = toml::find_or(s, "listen_ip", cfg.listen_ip);
-        cfg.control_port   = static_cast<uint16_t>(toml::find_or(s, "control_port", static_cast<int>(cfg.control_port)));
-        cfg.data_port      = static_cast<uint16_t>(toml::find_or(s, "data_port", static_cast<int>(cfg.data_port)));
+        cfg.port           = static_cast<uint16_t>(toml::find_or(s, "port", static_cast<int>(cfg.port)));
         cfg.max_clients    = toml::find_or(s, "max_clients", cfg.max_clients);
         cfg.server_password = toml::find_or(s, "password", cfg.server_password);
     }

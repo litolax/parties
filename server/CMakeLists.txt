@@ -6,9 +6,7 @@ set_target_properties(toml11::toml11 PROPERTIES INTERFACE_COMPILE_OPTIONS "")
 add_executable(parties_server
     src/main.cpp
     src/config.cpp
-    src/session.cpp
-    src/tls_server.cpp
-    src/enet_server.cpp
+    src/quic_server.cpp
     src/database.cpp
     src/auth.cpp
     src/server.cpp
@@ -24,4 +22,5 @@ target_link_libraries(parties_server
         parties_common
         unofficial::sqlite3::sqlite3
         toml11::toml11
+        ncrypt.lib
 )

@@ -176,6 +176,10 @@ void UiManager::update() {
 
 void UiManager::render() {
     if (!render_interface_ || !*render_interface_) return;
+    if (hwnd_ && IsIconic(hwnd_)) {
+        was_minimized_ = true;
+        return;
+    }
 
     render_interface_->BeginFrame();
     render_interface_->Clear();
@@ -189,6 +193,14 @@ void UiManager::on_resize(int width, int height) {
         render_interface_->SetViewport(width, height);
     if (context_)
         context_->SetDimensions(Rml::Vector2i(width, height));
+
+    // After restoring from minimize, re-bind swapchain to DComp visual.
+    // DWM may release the composition surface reference while minimized.
+    if (was_minimized_ && ui_visual_ && render_interface_) {
+        ui_visual_->SetContent(render_interface_->Get_SwapChain());
+        was_minimized_ = false;
+    }
+
     if (dcomp_device_)
         dcomp_device_->Commit();
 }

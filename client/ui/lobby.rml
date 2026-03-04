@@ -65,7 +65,7 @@
                     <span class="channel-count">({{ ch.user_count }})</span>
                 </div>
                 <div data-for="user : ch.users" class="channel-user-item">
-                    <span class="user-dot">&#x25CF;</span>
+                    <div class="user-dot"></div>
                     <span class="channel-username">{{ user.name }}</span>
                 </div>
             </div>
@@ -182,6 +182,30 @@
                     <div class="level-meter">
                         <div id="voice-level-fill" class="level-fill"></div>
                         <div id="vad-threshold-marker" class="threshold-marker"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Push to Talk -->
+            <div class="settings-section">
+                <div class="settings-toggle" data-event-click="toggle_ptt">
+                    <span class="toggle-indicator" data-class-on="ptt_enabled"></span>
+                    <span class="toggle-label">Push to Talk</span>
+                </div>
+                <div class="ptt-settings" data-if="ptt_enabled">
+                    <div class="keybind-row">
+                        <span class="slider-label">Key</span>
+                        <div class="keybind-btn" data-event-click="ptt_bind">
+                            <span data-if="ptt_binding">Press a key...</span>
+                            <span data-if="ptt_binding == false && ptt_key > 0">{{ ptt_key_name }}</span>
+                            <span data-if="ptt_binding == false && ptt_key == 0">Not set</span>
+                        </div>
+                    </div>
+                    <div class="slider-row">
+                        <span class="slider-label">Release Delay — {{ ptt_delay }}ms</span>
+                        <input type="range" class="slider" min="0" max="1000" step="50"
+                               data-value="ptt_delay"
+                               data-event-change="ptt_delay_changed" />
                     </div>
                 </div>
             </div>

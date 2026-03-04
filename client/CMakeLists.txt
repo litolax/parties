@@ -57,12 +57,12 @@ target_include_directories(parties_client
 )
 
 # Release: hide console (WINDOWS subsystem), Debug: keep console
-set_target_properties(parties_client PROPERTIES
-    WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>
-)
-target_link_options(parties_client PRIVATE
-    $<$<NOT:$<CONFIG:Debug>>:/ENTRY:mainCRTStartup>
-)
+# set_target_properties(parties_client PROPERTIES
+#     WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>
+# )
+# target_link_options(parties_client PRIVATE
+#     $<$<NOT:$<CONFIG:Debug>>:/ENTRY:mainCRTStartup>
+# )
 
 target_link_libraries(parties_client
     PRIVATE

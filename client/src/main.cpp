@@ -2,6 +2,7 @@
 #include <parties/version.h>
 #include <parties/crypto.h>
 #include <parties/net_common.h>
+#include <parties/quic_common.h>
 
 #include "RmlUi_Platform_Win32.h"
 
@@ -235,6 +236,13 @@ int main(int /*argc*/, char* /*argv*/[]) {
         return 1;
     }
 
+    if (!parties::quic_init()) {
+        std::fprintf(stderr, "Failed to initialize QUIC\n");
+        parties::net_cleanup();
+        parties::crypto_cleanup();
+        return 1;
+    }
+
     // Register window class
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -313,6 +321,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     app.shutdown();
     DestroyWindow(hwnd);
     UnregisterClassW(L"PartiesClient", wc.hInstance);
+    parties::quic_cleanup();
     parties::net_cleanup();
     parties::crypto_cleanup();
     return 0;

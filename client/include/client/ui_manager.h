@@ -80,6 +80,7 @@ private:
     HWND hwnd_ = nullptr;
     float dpi_scale_ = 1.0f;
     bool initialised_ = false;
+    bool was_minimized_ = false;
 
     class EventListenerInstancer;
     class GenericEventListener;

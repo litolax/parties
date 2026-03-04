@@ -1,8 +1,7 @@
 #pragma once
 
 #include <server/config.h>
-#include <server/tls_server.h>
-#include <server/enet_server.h>
+#include <server/quic_server.h>
 #include <server/database.h>
 #include <parties/types.h>
 #include <parties/video_common.h>
@@ -46,8 +45,7 @@ private:
 
     Config config_;
     Database db_;
-    TlsServer tls_;
-    EnetServer enet_;
+    QuicServer quic_;
     std::atomic<bool> running_{false};
     std::unordered_map<ChannelId, std::array<uint8_t, 32>> channel_keys_;
 

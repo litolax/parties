@@ -79,6 +79,13 @@ public:
     float vad_threshold = 0.02f;
     float voice_level = 0.0f;
 
+    // Push-to-talk
+    bool ptt_enabled = false;
+    int ptt_key = 0;                // Win32 virtual key code (0 = not set)
+    Rml::String ptt_key_name;       // display name for UI
+    bool ptt_binding = false;        // true when waiting for key press
+    float ptt_delay = 0.0f;         // release delay in ms (0-1000, step 50)
+
     // Screen sharing
     bool is_sharing = false;
     bool someone_sharing = false;           // convenience: !sharers.empty()
@@ -101,6 +108,9 @@ public:
     std::function<void(float)> on_normalize_target_changed;
     std::function<void(bool)>  on_vad_changed;
     std::function<void(float)> on_vad_threshold_changed;
+    std::function<void()>      on_toggle_ptt;
+    std::function<void()>      on_ptt_bind;
+    std::function<void(float)> on_ptt_delay_changed;
     std::function<void()>      on_toggle_share;
     std::function<void(int)>   on_select_share_target;
     std::function<void()>      on_cancel_share;

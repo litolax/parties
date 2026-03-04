@@ -3,20 +3,15 @@
 #include <parties/types.h>
 #include <parties/protocol.h>
 #include <parties/thread_queue.h>
+#include <parties/quic_common.h>
 
 #include <string>
 #include <cstdint>
 #include <vector>
-#include <thread>
 #include <atomic>
 #include <mutex>
 #include <functional>
-
-struct WOLFSSL_CTX;
-struct WOLFSSL;
-
-typedef struct _ENetHost ENetHost;
-typedef struct _ENetPeer ENetPeer;
+#include <unordered_map>
 
 namespace parties::client {
 
@@ -31,10 +26,10 @@ public:
     NetClient();
     ~NetClient();
 
-    // Connect to server's TLS control plane
+    // Connect to server via QUIC (unified control + data)
     bool connect(const std::string& host, uint16_t port);
 
-    // Get the server certificate fingerprint (after TLS connect)
+    // Get the server certificate fingerprint (after QUIC connect)
     std::string get_server_fingerprint() const;
 
     // Disconnect from server
@@ -42,51 +37,56 @@ public:
 
     bool is_connected() const { return connected_; }
 
-    // Send a control message to the server
+    // Send a control message to the server (reliable, on control stream)
     bool send_message(protocol::ControlMessageType type,
                       const uint8_t* payload, size_t payload_len);
 
-    // Connect ENet data plane using the enet_token from auth
-    bool connect_data(const std::string& host, uint16_t port,
-                      const EnetToken& token);
-
-    // Disconnect ENet
-    void disconnect_data();
-
-    // Service ENet (call periodically)
-    void service_enet(uint32_t timeout_ms = 5);
-
-    // Send a data packet on the voice channel
+    // Send a data packet (unreliable datagram — voice)
     bool send_data(const uint8_t* data, size_t len, bool reliable = false);
 
-    // Send a video packet on the video channel
-    bool send_video(const uint8_t* data, size_t len, bool reliable);
+    // Send a video packet (reliable, on video stream)
+    bool send_video(const uint8_t* data, size_t len, bool reliable = false);
 
-    // Queue of messages from the server (TLS control plane)
+    // Queue of messages from the server (control plane)
     ThreadQueue<ServerMessage>& incoming() { return incoming_; }
 
-    // Callback for data packets received from ENet
+    // Callback for data packets received (datagrams — voice/video)
     std::function<void(const uint8_t* data, size_t len)> on_data_received;
 
     // Callback for disconnect events
     std::function<void()> on_disconnected;
 
 private:
-    void reader_loop();
+    // MsQuic callbacks
+    static QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void* context,
+                                                     QUIC_CONNECTION_EVENT* event);
+    static QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void* context,
+                                                 QUIC_STREAM_EVENT* event);
 
-    // TLS control plane
-    WOLFSSL_CTX* tls_ctx_ = nullptr;
-    WOLFSSL*     ssl_ = nullptr;
-    int          socket_fd_ = -1;
+    QUIC_STATUS on_connection_event(HQUIC connection, QUIC_CONNECTION_EVENT* event);
+    QUIC_STATUS on_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event);
+
+    // Process received stream data (accumulate and parse length-prefixed messages)
+    void process_stream_data(const uint8_t* data, size_t len);
+
+    // Process received video stream data (length-prefixed video packets)
+    void process_video_stream_data(const uint8_t* data, size_t len);
+
+    const QUIC_API_TABLE* api_ = nullptr;
+    HQUIC registration_ = nullptr;
+    HQUIC configuration_ = nullptr;
+    HQUIC connection_ = nullptr;
+    HQUIC control_stream_ = nullptr;
+    HQUIC video_stream_ = nullptr;
+
     std::atomic<bool> connected_{false};
-    std::thread  reader_thread_;
-    std::mutex   write_mutex_;
+    std::mutex write_mutex_;
 
-    // ENet data plane (all access guarded by enet_mutex_)
-    ENetHost*    enet_host_ = nullptr;
-    ENetPeer*    enet_peer_ = nullptr;
-    std::atomic<bool> data_connected_{false};
-    std::mutex   enet_mutex_;
+    // Stream receive buffers
+    std::mutex buffer_mutex_;
+    std::vector<uint8_t> recv_buffer_;
+    std::mutex video_buffer_mutex_;
+    std::vector<uint8_t> video_recv_buffer_;
 
     ThreadQueue<ServerMessage> incoming_;
     std::string server_fingerprint_;

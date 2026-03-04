@@ -1,7 +1,7 @@
 find_package(Opus CONFIG REQUIRED)
 find_package(wolfssl CONFIG REQUIRED)
-find_package(enet CONFIG REQUIRED)
 find_package(argon2 CONFIG REQUIRED)
+find_package(msquic CONFIG REQUIRED)
 
 add_library(parties_common STATIC
     src/protocol.cpp
@@ -9,6 +9,7 @@ add_library(parties_common STATIC
     src/crypto.cpp
     src/codec.cpp
     src/net_common.cpp
+    src/quic_common.cpp
     src/permissions.cpp
 )
 
@@ -33,8 +34,8 @@ target_link_libraries(parties_common
     PUBLIC
         Opus::opus
         wolfssl::wolfssl
-        enet::enet_static
         argon2::argon2
+        msquic::msquic
 )
 
 if(WIN32)

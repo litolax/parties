@@ -4,8 +4,7 @@
 
 namespace parties::protocol {
 
-constexpr uint16_t DEFAULT_CONTROL_PORT = 7800;
-constexpr uint16_t DEFAULT_DATA_PORT    = 7801;
+constexpr uint16_t DEFAULT_PORT = 7800;
 
 enum class ControlMessageType : uint16_t {
     // Client -> Server
@@ -44,7 +43,7 @@ enum class ControlMessageType : uint16_t {
     ADMIN_RESULT          = 0x0301,
 };
 
-// Data plane packet types (first byte of every ENet data packet)
+// Data plane packet types (first byte of every datagram)
 constexpr uint8_t VOICE_PACKET_TYPE       = 0x01;
 constexpr uint8_t VIDEO_FRAME_PACKET_TYPE = 0x02;
 constexpr uint8_t VIDEO_CONTROL_TYPE      = 0x03;
@@ -53,11 +52,5 @@ constexpr uint8_t VIDEO_CONTROL_TYPE      = 0x03;
 constexpr uint8_t VIDEO_CTL_PLI         = 0x01;
 constexpr uint8_t VIDEO_CTL_SHARE_START = 0x02;
 constexpr uint8_t VIDEO_CTL_SHARE_STOP  = 0x03;
-
-// ENet channel assignments
-constexpr uint8_t ENET_CHANNEL_AUTH  = 0;
-constexpr uint8_t ENET_CHANNEL_VOICE = 1;
-constexpr uint8_t ENET_CHANNEL_VIDEO = 2;
-constexpr uint8_t ENET_NUM_CHANNELS  = 3;
 
 } // namespace parties::protocol

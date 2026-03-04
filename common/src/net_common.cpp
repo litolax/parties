@@ -1,15 +1,24 @@
 #include <parties/net_common.h>
 
-#include <enet.h>
+#ifdef _WIN32
+#  include <winsock2.h>
+#endif
 
 namespace parties {
 
 bool net_init() {
-    return enet_initialize() == 0;
+#ifdef _WIN32
+    WSADATA wsa;
+    return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+#else
+    return true;
+#endif
 }
 
 void net_cleanup() {
-    enet_deinitialize();
+#ifdef _WIN32
+    WSACleanup();
+#endif
 }
 
 } // namespace parties

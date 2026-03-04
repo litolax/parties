@@ -1,25 +1,9 @@
 #include <client/net_client.h>
+#include <parties/quic_common.h>
+#include <parties/protocol.h>
 #include <parties/crypto.h>
 
-#include <wolfssl/options.h>
-#include <wolfssl/ssl.h>
-
-#include <enet.h>
-
-#ifdef _WIN32
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-   using socklen_t = int;
-   static int close_socket(int fd) { return closesocket(fd); }
-#else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <netdb.h>
-#  include <unistd.h>
-   static int close_socket(int fd) { return close(fd); }
-#endif
-
+#include <wincrypt.h>
 #include <cstdio>
 #include <cstring>
 
@@ -29,91 +13,102 @@ NetClient::NetClient() = default;
 
 NetClient::~NetClient() {
     disconnect();
-    disconnect_data();
 }
 
 bool NetClient::connect(const std::string& host, uint16_t port) {
     if (connected_) return false;
 
-    tls_ctx_ = parties::create_tls_client_ctx();
-    if (!tls_ctx_) {
-        std::fprintf(stderr, "[NetClient] Failed to create TLS context\n");
+    api_ = parties::quic_api();
+    if (!api_) {
+        std::fprintf(stderr, "[NetClient] MsQuic not initialized\n");
         return false;
     }
 
-    // Resolve hostname
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    QUIC_STATUS status;
 
-    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-        // Try DNS resolution
-        struct addrinfo hints{}, *result = nullptr;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        if (getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || !result) {
-            std::fprintf(stderr, "[NetClient] Failed to resolve %s\n", host.c_str());
-            parties::free_tls_ctx(tls_ctx_);
-            tls_ctx_ = nullptr;
-            return false;
-        }
-        addr.sin_addr = reinterpret_cast<struct sockaddr_in*>(result->ai_addr)->sin_addr;
-        freeaddrinfo(result);
-    }
-
-    // Create TCP socket
-    socket_fd_ = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
-    if (socket_fd_ < 0) {
-        std::fprintf(stderr, "[NetClient] Failed to create socket\n");
-        parties::free_tls_ctx(tls_ctx_);
-        tls_ctx_ = nullptr;
+    // Registration
+    QUIC_REGISTRATION_CONFIG reg_config = { "parties_client", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+    status = api_->RegistrationOpen(&reg_config, &registration_);
+    if (QUIC_FAILED(status)) {
+        std::fprintf(stderr, "[NetClient] RegistrationOpen failed: 0x%lx\n", status);
         return false;
     }
 
-    if (::connect(socket_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::fprintf(stderr, "[NetClient] Failed to connect to %s:%u\n",
-                     host.c_str(), port);
-        close_socket(socket_fd_);
-        socket_fd_ = -1;
-        parties::free_tls_ctx(tls_ctx_);
-        tls_ctx_ = nullptr;
+    // Configuration with settings
+    QUIC_SETTINGS settings = {};
+    settings.IdleTimeoutMs = 30000;
+    settings.IsSet.IdleTimeoutMs = TRUE;
+    settings.DatagramReceiveEnabled = TRUE;
+    settings.IsSet.DatagramReceiveEnabled = TRUE;
+
+    QUIC_BUFFER alpn = parties::make_alpn();
+    status = api_->ConfigurationOpen(registration_, &alpn, 1, &settings,
+                                      sizeof(settings), nullptr, &configuration_);
+    if (QUIC_FAILED(status)) {
+        std::fprintf(stderr, "[NetClient] ConfigurationOpen failed: 0x%lx\n", status);
+        api_->RegistrationClose(registration_);
+        registration_ = nullptr;
         return false;
     }
 
-    // TLS handshake
-    ssl_ = wolfSSL_new(tls_ctx_);
-    if (!ssl_) {
-        std::fprintf(stderr, "[NetClient] Failed to create SSL object\n");
-        close_socket(socket_fd_);
-        socket_fd_ = -1;
-        parties::free_tls_ctx(tls_ctx_);
-        tls_ctx_ = nullptr;
+    // Client credentials — no certificate, disable validation (TOFU model)
+    QUIC_CREDENTIAL_CONFIG cred_config = {};
+    cred_config.Type = QUIC_CREDENTIAL_TYPE_NONE;
+    cred_config.Flags = QUIC_CREDENTIAL_FLAG_CLIENT |
+                        QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION |
+                        QUIC_CREDENTIAL_FLAG_INDICATE_CERTIFICATE_RECEIVED;
+
+    status = api_->ConfigurationLoadCredential(configuration_, &cred_config);
+    if (QUIC_FAILED(status)) {
+        std::fprintf(stderr, "[NetClient] ConfigurationLoadCredential failed: 0x%lx\n", status);
+        api_->ConfigurationClose(configuration_);
+        configuration_ = nullptr;
+        api_->RegistrationClose(registration_);
+        registration_ = nullptr;
         return false;
     }
 
-    wolfSSL_set_fd(ssl_, socket_fd_);
-
-    if (wolfSSL_connect(ssl_) != SSL_SUCCESS) {
-        int err = wolfSSL_get_error(ssl_, 0);
-        char buf[256];
-        wolfSSL_ERR_error_string(err, buf);
-        std::fprintf(stderr, "[NetClient] TLS handshake failed: %s\n", buf);
-        wolfSSL_free(ssl_);
-        ssl_ = nullptr;
-        close_socket(socket_fd_);
-        socket_fd_ = -1;
-        parties::free_tls_ctx(tls_ctx_);
-        tls_ctx_ = nullptr;
+    // Open connection
+    status = api_->ConnectionOpen(registration_, connection_callback, this, &connection_);
+    if (QUIC_FAILED(status)) {
+        std::fprintf(stderr, "[NetClient] ConnectionOpen failed: 0x%lx\n", status);
+        api_->ConfigurationClose(configuration_);
+        configuration_ = nullptr;
+        api_->RegistrationClose(registration_);
+        registration_ = nullptr;
         return false;
     }
 
-    // Get server certificate fingerprint (for TOFU)
-    server_fingerprint_ = parties::get_peer_cert_fingerprint(ssl_);
-    std::printf("[NetClient] Connected to %s:%u (fingerprint: %s)\n",
-                host.c_str(), port, server_fingerprint_.c_str());
+    // Start connection
+    status = api_->ConnectionStart(connection_, configuration_,
+                                    QUIC_ADDRESS_FAMILY_UNSPEC,
+                                    host.c_str(), port);
+    if (QUIC_FAILED(status)) {
+        std::fprintf(stderr, "[NetClient] ConnectionStart failed: 0x%lx\n", status);
+        api_->ConnectionClose(connection_);
+        connection_ = nullptr;
+        api_->ConfigurationClose(configuration_);
+        configuration_ = nullptr;
+        api_->RegistrationClose(registration_);
+        registration_ = nullptr;
+        return false;
+    }
 
-    connected_ = true;
-    reader_thread_ = std::thread(&NetClient::reader_loop, this);
+    std::printf("[NetClient] Connecting to %s:%u via QUIC...\n", host.c_str(), port);
+
+    // Connection is async — connected_ will be set in the CONNECTED event
+    // But we need to wait for it here for API compatibility
+    // Wait up to 10 seconds for connection
+    for (int i = 0; i < 1000 && !connected_; i++) {
+        Sleep(10);
+    }
+
+    if (!connected_) {
+        std::fprintf(stderr, "[NetClient] QUIC connection timed out\n");
+        api_->ConnectionShutdown(connection_, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+        // Cleanup happens in SHUTDOWN_COMPLETE callback
+        return false;
+    }
 
     return true;
 }
@@ -123,255 +118,346 @@ std::string NetClient::get_server_fingerprint() const {
 }
 
 void NetClient::disconnect() {
-    if (!connected_) return;
+    if (!connected_ && !connection_) return;
     connected_ = false;
 
-    if (ssl_) {
-        wolfSSL_shutdown(ssl_);
-        wolfSSL_free(ssl_);
-        ssl_ = nullptr;
+    if (connection_) {
+        api_->ConnectionShutdown(connection_, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+        // Connection and stream cleanup happens in SHUTDOWN_COMPLETE callback
+        // Wait briefly for clean shutdown
+        Sleep(100);
     }
-    if (socket_fd_ >= 0) {
-        close_socket(socket_fd_);
-        socket_fd_ = -1;
-    }
-    if (reader_thread_.joinable())
-        reader_thread_.join();
 
-    if (tls_ctx_) {
-        parties::free_tls_ctx(tls_ctx_);
-        tls_ctx_ = nullptr;
+    // Force cleanup if callbacks haven't fired
+    if (control_stream_) {
+        control_stream_ = nullptr;
     }
+    if (video_stream_) {
+        video_stream_ = nullptr;
+    }
+    if (connection_) {
+        api_->ConnectionClose(connection_);
+        connection_ = nullptr;
+    }
+    if (configuration_) {
+        api_->ConfigurationClose(configuration_);
+        configuration_ = nullptr;
+    }
+    if (registration_) {
+        api_->RegistrationClose(registration_);
+        registration_ = nullptr;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(buffer_mutex_);
+        recv_buffer_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(video_buffer_mutex_);
+        video_recv_buffer_.clear();
+    }
+
+    server_fingerprint_.clear();
 }
 
 bool NetClient::send_message(protocol::ControlMessageType type,
-                             const uint8_t* payload, size_t payload_len) {
+                              const uint8_t* payload, size_t payload_len) {
     std::lock_guard<std::mutex> lock(write_mutex_);
-    if (!connected_ || !ssl_) return false;
+    if (!connected_ || !control_stream_) return false;
 
     // Wire format: [u32 length][u16 type][payload]
     uint32_t msg_len = static_cast<uint32_t>(2 + payload_len);
+    size_t total_len = 6 + payload_len;
+
+    auto* buf_data = new uint8_t[total_len];
+    std::memcpy(buf_data, &msg_len, 4);
     uint16_t msg_type = static_cast<uint16_t>(type);
+    std::memcpy(buf_data + 4, &msg_type, 2);
+    if (payload_len > 0)
+        std::memcpy(buf_data + 6, payload, payload_len);
 
-    uint8_t header[6];
-    std::memcpy(header, &msg_len, 4);
-    std::memcpy(header + 4, &msg_type, 2);
+    auto* quic_buf = new QUIC_BUFFER{ static_cast<uint32_t>(total_len), buf_data };
 
-    int written = wolfSSL_write(ssl_, header, 6);
-    if (written != 6) { connected_ = false; return false; }
-
-    if (payload_len > 0) {
-        size_t total = 0;
-        while (total < payload_len) {
-            written = wolfSSL_write(ssl_, payload + total,
-                                    static_cast<int>(payload_len - total));
-            if (written <= 0) { connected_ = false; return false; }
-            total += static_cast<size_t>(written);
-        }
+    QUIC_STATUS status = api_->StreamSend(control_stream_, quic_buf, 1,
+                                           QUIC_SEND_FLAG_NONE, quic_buf);
+    if (QUIC_FAILED(status)) {
+        delete[] buf_data;
+        delete quic_buf;
+        return false;
     }
     return true;
 }
 
-void NetClient::reader_loop() {
-    while (connected_) {
-        // Read message length (4 bytes)
-        uint8_t len_buf[4];
-        int total = 0;
-        while (total < 4) {
-            int r = wolfSSL_read(ssl_, len_buf + total, 4 - total);
-            if (r <= 0) { connected_ = false; break; }
-            total += r;
-        }
-        if (!connected_) break;
+bool NetClient::send_data(const uint8_t* data, size_t len, bool /*reliable*/) {
+    if (!connected_ || !connection_) return false;
 
+    // Both the data buffer AND the QUIC_BUFFER descriptor must be heap-allocated
+    // because DatagramSend is async — MsQuic stores only the pointer.
+    auto* buf_data = new uint8_t[len];
+    std::memcpy(buf_data, data, len);
+
+    auto* quic_buf = new QUIC_BUFFER{ static_cast<uint32_t>(len), buf_data };
+    QUIC_STATUS status = api_->DatagramSend(connection_, quic_buf, 1,
+                                             QUIC_SEND_FLAG_NONE, quic_buf);
+    if (QUIC_FAILED(status)) {
+        delete[] buf_data;
+        delete quic_buf;
+        return false;
+    }
+    return true;
+}
+
+bool NetClient::send_video(const uint8_t* data, size_t len, bool /*reliable*/) {
+    if (!connected_ || !video_stream_) return false;
+
+    // Wire format: [u32 len][data]
+    size_t total_len = 4 + len;
+    auto* buf_data = new uint8_t[total_len];
+    uint32_t frame_len = static_cast<uint32_t>(len);
+    std::memcpy(buf_data, &frame_len, 4);
+    std::memcpy(buf_data + 4, data, len);
+
+    auto* quic_buf = new QUIC_BUFFER{ static_cast<uint32_t>(total_len), buf_data };
+    QUIC_STATUS status = api_->StreamSend(video_stream_, quic_buf, 1,
+                                           QUIC_SEND_FLAG_NONE, quic_buf);
+    if (QUIC_FAILED(status)) {
+        delete[] buf_data;
+        delete quic_buf;
+        return false;
+    }
+    return true;
+}
+
+// ── MsQuic callbacks ──
+
+QUIC_STATUS QUIC_API NetClient::connection_callback(
+    HQUIC connection, void* context, QUIC_CONNECTION_EVENT* event) {
+    auto* client = static_cast<NetClient*>(context);
+    return client->on_connection_event(connection, event);
+}
+
+QUIC_STATUS QUIC_API NetClient::stream_callback(
+    HQUIC stream, void* context, QUIC_STREAM_EVENT* event) {
+    auto* client = static_cast<NetClient*>(context);
+    return client->on_stream_event(stream, event);
+}
+
+QUIC_STATUS NetClient::on_connection_event(HQUIC connection,
+                                            QUIC_CONNECTION_EVENT* event) {
+    switch (event->Type) {
+    case QUIC_CONNECTION_EVENT_CONNECTED: {
+        std::printf("[NetClient] QUIC connected\n");
+
+        // Open bidirectional control stream
+        HQUIC stream = nullptr;
+        QUIC_STATUS status = api_->StreamOpen(connection, QUIC_STREAM_OPEN_FLAG_NONE,
+                                               stream_callback, this, &stream);
+        if (QUIC_SUCCEEDED(status)) {
+            status = api_->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE);
+            if (QUIC_SUCCEEDED(status)) {
+                control_stream_ = stream;
+            } else {
+                std::fprintf(stderr, "[NetClient] Control StreamStart failed: 0x%lx\n", status);
+                api_->StreamClose(stream);
+            }
+        } else {
+            std::fprintf(stderr, "[NetClient] Control StreamOpen failed: 0x%lx\n", status);
+        }
+
+        // Open bidirectional video stream
+        if (control_stream_) {
+            HQUIC vstream = nullptr;
+            status = api_->StreamOpen(connection, QUIC_STREAM_OPEN_FLAG_NONE,
+                                       stream_callback, this, &vstream);
+            if (QUIC_SUCCEEDED(status)) {
+                status = api_->StreamStart(vstream, QUIC_STREAM_START_FLAG_IMMEDIATE);
+                if (QUIC_SUCCEEDED(status)) {
+                    video_stream_ = vstream;
+                    connected_ = true;
+                } else {
+                    std::fprintf(stderr, "[NetClient] Video StreamStart failed: 0x%lx\n", status);
+                    api_->StreamClose(vstream);
+                    connected_ = true;  // Still connected, just no video stream
+                }
+            } else {
+                std::fprintf(stderr, "[NetClient] Video StreamOpen failed: 0x%lx\n", status);
+                connected_ = true;  // Still connected
+            }
+        }
+        break;
+    }
+
+    case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
+        // Voice/video data from server
+        auto* buf = event->DATAGRAM_RECEIVED.Buffer;
+        if (buf->Length > 0 && on_data_received)
+            on_data_received(buf->Buffer, buf->Length);
+        break;
+    }
+
+    case QUIC_CONNECTION_EVENT_DATAGRAM_STATE_CHANGED:
+        break;
+
+    case QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED: {
+        if (QUIC_DATAGRAM_SEND_STATE_IS_FINAL(event->DATAGRAM_SEND_STATE_CHANGED.State)) {
+            auto* quic_buf = static_cast<QUIC_BUFFER*>(event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
+            if (quic_buf) {
+                delete[] quic_buf->Buffer;
+                delete quic_buf;
+            }
+        }
+        break;
+    }
+
+    case QUIC_CONNECTION_EVENT_PEER_CERTIFICATE_RECEIVED: {
+        // Extract server certificate fingerprint for TOFU verification.
+        // On Windows (Schannel), Certificate is a PCCERT_CONTEXT.
+        auto* cert = static_cast<PCCERT_CONTEXT>(event->PEER_CERTIFICATE_RECEIVED.Certificate);
+        if (cert && cert->pbCertEncoded && cert->cbCertEncoded > 0) {
+            server_fingerprint_ = parties::sha256_hex(
+                cert->pbCertEncoded, cert->cbCertEncoded);
+            std::printf("[NetClient] Server fingerprint: %s\n", server_fingerprint_.c_str());
+        }
+        break;
+    }
+
+    case QUIC_CONNECTION_EVENT_RESUMPTION_TICKET_RECEIVED:
+        // TODO: persist ticket for 0-RTT reconnection
+        break;
+
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
+        std::printf("[NetClient] Connection shut down by transport: 0x%lx\n",
+                    event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
+        connected_ = false;
+        break;
+
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
+        std::printf("[NetClient] Connection shut down by server\n");
+        connected_ = false;
+        break;
+
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
+        std::printf("[NetClient] Connection shutdown complete\n");
+        connected_ = false;
+        control_stream_ = nullptr;
+        video_stream_ = nullptr;
+
+        if (on_disconnected)
+            on_disconnected();
+        break;
+
+    default:
+        break;
+    }
+
+    return QUIC_STATUS_SUCCESS;
+}
+
+QUIC_STATUS NetClient::on_stream_event(HQUIC stream, QUIC_STREAM_EVENT* event) {
+    switch (event->Type) {
+    case QUIC_STREAM_EVENT_RECEIVE: {
+        // Route to control or video stream processor
+        bool is_video = (stream == video_stream_);
+        for (uint32_t i = 0; i < event->RECEIVE.BufferCount; i++) {
+            auto& buf = event->RECEIVE.Buffers[i];
+            if (is_video)
+                process_video_stream_data(buf.Buffer, buf.Length);
+            else
+                process_stream_data(buf.Buffer, buf.Length);
+        }
+        break;
+    }
+
+    case QUIC_STREAM_EVENT_SEND_COMPLETE: {
+        auto* quic_buf = static_cast<QUIC_BUFFER*>(event->SEND_COMPLETE.ClientContext);
+        if (quic_buf) {
+            delete[] quic_buf->Buffer;
+            delete quic_buf;
+        }
+        break;
+    }
+
+    case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
+        break;
+
+    case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
+    case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
+        api_->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+        break;
+
+    case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
+        if (stream == control_stream_)
+            control_stream_ = nullptr;
+        else if (stream == video_stream_)
+            video_stream_ = nullptr;
+        api_->StreamClose(stream);
+        break;
+
+    default:
+        break;
+    }
+
+    return QUIC_STATUS_SUCCESS;
+}
+
+void NetClient::process_stream_data(const uint8_t* data, size_t len) {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    recv_buffer_.insert(recv_buffer_.end(), data, data + len);
+
+    // Parse complete messages: [u32 length][u16 type][payload]
+    while (recv_buffer_.size() >= 6) {
         uint32_t msg_len;
-        std::memcpy(&msg_len, len_buf, 4);
+        std::memcpy(&msg_len, recv_buffer_.data(), 4);
 
         if (msg_len < 2 || msg_len > 1024 * 1024) {
             std::fprintf(stderr, "[NetClient] Invalid message length %u\n", msg_len);
-            connected_ = false;
+            recv_buffer_.clear();
             break;
         }
 
-        // Read message type (2 bytes)
-        uint8_t type_buf[2];
-        total = 0;
-        while (total < 2) {
-            int r = wolfSSL_read(ssl_, type_buf + total, 2 - total);
-            if (r <= 0) { connected_ = false; break; }
-            total += r;
-        }
-        if (!connected_) break;
+        size_t total_needed = 4 + msg_len;
+        if (recv_buffer_.size() < total_needed) break;
 
         uint16_t raw_type;
-        std::memcpy(&raw_type, type_buf, 2);
+        std::memcpy(&raw_type, recv_buffer_.data() + 4, 2);
 
-        // Read payload
         uint32_t payload_len = msg_len - 2;
-        std::vector<uint8_t> payload(payload_len);
-        if (payload_len > 0) {
-            total = 0;
-            while (static_cast<uint32_t>(total) < payload_len) {
-                int r = wolfSSL_read(ssl_, payload.data() + total,
-                                     static_cast<int>(payload_len - total));
-                if (r <= 0) { connected_ = false; break; }
-                total += r;
-            }
-            if (!connected_) break;
-        }
-
         ServerMessage msg;
         msg.type = static_cast<protocol::ControlMessageType>(raw_type);
-        msg.payload = std::move(payload);
+        if (payload_len > 0)
+            msg.payload.assign(recv_buffer_.data() + 6, recv_buffer_.data() + 6 + payload_len);
+
         incoming_.push(std::move(msg));
-    }
 
-    std::printf("[NetClient] Disconnected from server\n");
-    if (on_disconnected)
-        on_disconnected();
-}
-
-bool NetClient::connect_data(const std::string& host, uint16_t port,
-                              const EnetToken& token) {
-    if (data_connected_) return false;
-
-    // Create ENet client host (no incoming connections, 3 channels)
-    enet_host_ = enet_host_create(nullptr, 1, protocol::ENET_NUM_CHANNELS, 0, 0);
-    if (!enet_host_) {
-        std::fprintf(stderr, "[NetClient] Failed to create ENet host\n");
-        return false;
-    }
-
-    ENetAddress address = {};
-    int resolve_result = enet_address_set_host(&address, host.c_str());
-    address.port = port;
-
-    if (resolve_result < 0) {
-        std::fprintf(stderr, "[NetClient] enet_address_set_host failed for '%s'\n",
-                     host.c_str());
-        enet_host_destroy(enet_host_);
-        enet_host_ = nullptr;
-        return false;
-    }
-
-    // Log the resolved address
-    char resolved_ip[64] = {};
-    enet_address_get_host_ip(&address, resolved_ip, sizeof(resolved_ip));
-    std::printf("[NetClient] ENet connecting to %s:%u (resolved: %s)\n",
-                host.c_str(), port, resolved_ip);
-
-    // Connect
-    enet_peer_ = enet_host_connect(enet_host_, &address, protocol::ENET_NUM_CHANNELS, 0);
-    if (!enet_peer_) {
-        std::fprintf(stderr, "[NetClient] Failed to initiate ENet connection\n");
-        enet_host_destroy(enet_host_);
-        enet_host_ = nullptr;
-        return false;
-    }
-
-    // Wait for connection (up to 5 seconds)
-    ENetEvent event;
-    int service_result = enet_host_service(enet_host_, &event, 5000);
-    if (service_result > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
-        std::printf("[NetClient] ENet connected to %s:%u\n", host.c_str(), port);
-    } else {
-        std::fprintf(stderr, "[NetClient] ENet connection failed: service=%d event=%d\n",
-                     service_result, service_result > 0 ? event.type : -1);
-        enet_peer_reset(enet_peer_);
-        enet_host_destroy(enet_host_);
-        enet_host_ = nullptr;
-        enet_peer_ = nullptr;
-        return false;
-    }
-
-    // Send enet_token as first packet (reliable, channel 0)
-    ENetPacket* pkt = enet_packet_create(token.data(), token.size(),
-                                         ENET_PACKET_FLAG_RELIABLE);
-    if (enet_peer_send(enet_peer_, 0, pkt) < 0) {
-        std::fprintf(stderr, "[NetClient] Failed to send enet_token\n");
-        enet_peer_disconnect(enet_peer_, 0);
-        enet_host_destroy(enet_host_);
-        enet_host_ = nullptr;
-        enet_peer_ = nullptr;
-        return false;
-    }
-    enet_host_flush(enet_host_);
-
-    data_connected_ = true;
-    return true;
-}
-
-void NetClient::disconnect_data() {
-    if (!data_connected_) return;
-    data_connected_ = false;
-
-    if (enet_peer_) {
-        enet_peer_disconnect(enet_peer_, 0);
-        // Allow time for disconnect to complete
-        ENetEvent event;
-        while (enet_host_service(enet_host_, &event, 500) > 0) {
-            if (event.type == ENET_EVENT_TYPE_DISCONNECT) break;
-            if (event.type == ENET_EVENT_TYPE_RECEIVE)
-                enet_packet_destroy(event.packet);
-        }
-        enet_peer_ = nullptr;
-    }
-
-    if (enet_host_) {
-        enet_host_destroy(enet_host_);
-        enet_host_ = nullptr;
+        recv_buffer_.erase(recv_buffer_.begin(), recv_buffer_.begin() + total_needed);
     }
 }
 
-void NetClient::service_enet(uint32_t timeout_ms) {
-    if (!enet_host_ || !data_connected_) return;
+void NetClient::process_video_stream_data(const uint8_t* data, size_t len) {
+    std::lock_guard<std::mutex> lock(video_buffer_mutex_);
+    video_recv_buffer_.insert(video_recv_buffer_.end(), data, data + len);
 
-    std::lock_guard<std::mutex> lock(enet_mutex_);
-    ENetEvent event;
-    while (enet_host_service(enet_host_, &event, timeout_ms) > 0) {
-        switch (event.type) {
-        case ENET_EVENT_TYPE_RECEIVE:
-            if (on_data_received && event.packet->dataLength > 0)
-                on_data_received(event.packet->data, event.packet->dataLength);
-            enet_packet_destroy(event.packet);
-            break;
+    // Parse complete frames: [u32 length][data]
+    while (video_recv_buffer_.size() >= 4) {
+        uint32_t frame_len;
+        std::memcpy(&frame_len, video_recv_buffer_.data(), 4);
 
-        case ENET_EVENT_TYPE_DISCONNECT:
-        case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
-            data_connected_ = false;
-            enet_peer_ = nullptr;
-            std::printf("[NetClient] ENet disconnected\n");
-            break;
-
-        default:
+        if (frame_len == 0 || frame_len > 4 * 1024 * 1024) {
+            std::fprintf(stderr, "[NetClient] Invalid video frame length %u\n", frame_len);
+            video_recv_buffer_.clear();
             break;
         }
-        timeout_ms = 0;
+
+        size_t total_needed = 4 + frame_len;
+        if (video_recv_buffer_.size() < total_needed) break;
+
+        // Dispatch the raw frame data (same format as datagrams)
+        if (on_data_received)
+            on_data_received(video_recv_buffer_.data() + 4, frame_len);
+
+        video_recv_buffer_.erase(video_recv_buffer_.begin(),
+                                  video_recv_buffer_.begin() + total_needed);
     }
-}
-
-bool NetClient::send_data(const uint8_t* data, size_t len, bool reliable) {
-    if (!data_connected_ || !enet_peer_) return false;
-
-    std::lock_guard<std::mutex> lock(enet_mutex_);
-    enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE
-                                 : ENET_PACKET_FLAG_UNSEQUENCED;
-    ENetPacket* packet = enet_packet_create(data, len, flags);
-    if (!packet) return false;
-
-    return enet_peer_send(enet_peer_, protocol::ENET_CHANNEL_VOICE, packet) == 0;
-}
-
-bool NetClient::send_video(const uint8_t* data, size_t len, bool reliable) {
-    if (!data_connected_ || !enet_peer_) return false;
-
-    std::lock_guard<std::mutex> lock(enet_mutex_);
-    enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE
-                                 : ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
-    ENetPacket* packet = enet_packet_create(data, len, flags);
-    if (!packet) return false;
-
-    return enet_peer_send(enet_peer_, protocol::ENET_CHANNEL_VIDEO, packet) == 0;
 }
 
 } // namespace parties::client

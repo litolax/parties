@@ -76,6 +76,11 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.Bind("vad_enabled",      &vad_enabled);
     ctor.Bind("vad_threshold",    &vad_threshold);
     ctor.Bind("voice_level",      &voice_level);
+    ctor.Bind("ptt_enabled",      &ptt_enabled);
+    ctor.Bind("ptt_key",          &ptt_key);
+    ctor.Bind("ptt_key_name",     &ptt_key_name);
+    ctor.Bind("ptt_binding",      &ptt_binding);
+    ctor.Bind("ptt_delay",        &ptt_delay);
 
     // Screen sharing
     ctor.Bind("is_sharing",          &is_sharing);
@@ -164,6 +169,21 @@ bool LobbyModel::init(Rml::Context* context) {
             if (on_vad_threshold_changed) on_vad_threshold_changed(vad_threshold);
         });
 
+    ctor.BindEventCallback("toggle_ptt",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_toggle_ptt) on_toggle_ptt();
+        });
+
+    ctor.BindEventCallback("ptt_bind",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_ptt_bind) on_ptt_bind();
+        });
+
+    ctor.BindEventCallback("ptt_delay_changed",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_ptt_delay_changed) on_ptt_delay_changed(ptt_delay);
+        });
+
     ctor.BindEventCallback("toggle_share",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
             if (on_toggle_share) on_toggle_share();
@@ -226,6 +246,11 @@ void LobbyModel::dirty_all() {
     dirty("vad_enabled");
     dirty("vad_threshold");
     dirty("voice_level");
+    dirty("ptt_enabled");
+    dirty("ptt_key");
+    dirty("ptt_key_name");
+    dirty("ptt_binding");
+    dirty("ptt_delay");
     dirty("is_sharing");
     dirty("someone_sharing");
     dirty("sharers");
