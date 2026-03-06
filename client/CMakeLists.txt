@@ -32,6 +32,8 @@ add_executable(parties_client
     src/video_encoder.cpp
     src/video_decoder.cpp
     src/video_element.cpp
+    src/stream_audio_capture.cpp
+    src/stream_audio_player.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/app.rc"
 )
 

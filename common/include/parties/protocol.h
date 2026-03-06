@@ -42,10 +42,11 @@ enum class ControlMessageType : uint16_t {
     ADMIN_RESULT          = 0x0301,
 };
 
-// Data plane packet types (first byte of every datagram)
-constexpr uint8_t VOICE_PACKET_TYPE       = 0x01;
-constexpr uint8_t VIDEO_FRAME_PACKET_TYPE = 0x02;
-constexpr uint8_t VIDEO_CONTROL_TYPE      = 0x03;
+// Data plane packet types (first byte of every datagram/stream)
+constexpr uint8_t VOICE_PACKET_TYPE        = 0x01;
+constexpr uint8_t VIDEO_FRAME_PACKET_TYPE  = 0x02;
+constexpr uint8_t VIDEO_CONTROL_TYPE       = 0x03;
+constexpr uint8_t STREAM_AUDIO_PACKET_TYPE = 0x04;  // Screen share audio (Opus, stereo)
 
 // Video control subtypes
 constexpr uint8_t VIDEO_CTL_PLI         = 0x01;

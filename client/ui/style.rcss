@@ -1192,6 +1192,26 @@ video_frame {
     background-color: #e8645a;
 }
 
+/* ── Stream volume control ─────────────────────── */
+
+.stream-volume-control {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6dp;
+    margin: 0dp 12dp;
+}
+
+.stream-volume-icon {
+    display: block;
+    opacity: 0.6;
+}
+
+.stream-volume-slider {
+    display: block;
+    width: 100dp;
+}
+
 /* ── Seed phrase onboarding ──────────────────────── */
 
 .onboarding-box {

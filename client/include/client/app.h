@@ -9,6 +9,8 @@
 #include <client/server_list_model.h>
 #include <client/screen_capture.h>
 #include <client/sound_player.h>
+#include <client/stream_audio_capture.h>
+#include <client/stream_audio_player.h>
 #include <parties/types.h>
 #include <parties/video_common.h>
 
@@ -129,6 +131,10 @@ private:
     std::unique_ptr<VideoElementInstancer> video_instancer_;
     bool sharing_screen_ = false;
     uint32_t video_frame_number_ = 0;
+
+    // Stream audio (capture for sharer, playback for viewer)
+    std::unique_ptr<StreamAudioCapture> stream_audio_capture_;
+    StreamAudioPlayer stream_audio_player_;
 
     // Multi-sharer tracking
     struct SharerInfo {

@@ -118,6 +118,9 @@ void Server::process_data_packets() {
         else if (pkt.packet_type == protocol::VIDEO_FRAME_PACKET_TYPE) {
             forward_video_frame(pkt);
         }
+        else if (pkt.packet_type == protocol::STREAM_AUDIO_PACKET_TYPE) {
+            forward_stream_audio(pkt);
+        }
         else if (pkt.packet_type == protocol::VIDEO_CONTROL_TYPE) {
             handle_video_control(pkt);
         }
@@ -806,6 +809,38 @@ void Server::handle_video_control(const DataPacket& pkt) {
                 quic_.send_datagram(s->id, fwd.data(), fwd.size());
                 break;
             }
+        }
+    }
+}
+
+void Server::forward_stream_audio(const DataPacket& pkt) {
+    auto session = quic_.get_session(pkt.session_id);
+    if (!session || !session->authenticated || session->channel_id == 0)
+        return;
+
+    // Verify this user is an active screen sharer
+    auto it = channel_screen_sharers_.find(session->channel_id);
+    if (it == channel_screen_sharers_.end() ||
+        it->second.count(session->user_id) == 0)
+        return;
+
+    // Forward: [STREAM_AUDIO_PACKET_TYPE][sender_id(4)][opus_data]
+    std::vector<uint8_t> fwd;
+    fwd.reserve(1 + 4 + pkt.data.size());
+    fwd.push_back(protocol::STREAM_AUDIO_PACKET_TYPE);
+    uint32_t uid = session->user_id;
+    fwd.insert(fwd.end(), reinterpret_cast<uint8_t*>(&uid),
+               reinterpret_cast<uint8_t*>(&uid) + 4);
+    fwd.insert(fwd.end(), pkt.data.begin(), pkt.data.end());
+
+    // Forward to viewers subscribed to this sharer via datagram
+    auto all_sessions = quic_.get_sessions();
+    for (auto& s : all_sessions) {
+        if (s->id != pkt.session_id &&
+            s->authenticated &&
+            s->channel_id == session->channel_id &&
+            s->subscribed_sharer == session->user_id) {
+            quic_.send_datagram(s->id, fwd.data(), fwd.size());
         }
     }
 }

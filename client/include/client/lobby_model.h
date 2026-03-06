@@ -92,6 +92,7 @@ public:
     bool someone_sharing = false;           // convenience: !sharers.empty()
     Rml::Vector<ActiveSharer> sharers;      // all active sharers in channel
     int viewing_sharer_id = 0;              // who we're subscribed to (0 = none)
+    float stream_volume = 1.0f;             // stream audio volume (0.0 - 2.0)
 
     // Share picker
     bool show_share_picker = false;
@@ -141,6 +142,7 @@ public:
     std::function<void(int)>   on_watch_sharer;
     std::function<void(int)>   on_select_sharer;
     std::function<void()>      on_stop_watching;
+    std::function<void(float)> on_stream_volume_changed;
 
     // Identity
     std::function<void()>      on_show_seed_phrase;

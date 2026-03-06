@@ -89,6 +89,7 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.Bind("someone_sharing",     &someone_sharing);
     ctor.Bind("sharers",             &sharers);
     ctor.Bind("viewing_sharer_id",   &viewing_sharer_id);
+    ctor.Bind("stream_volume",       &stream_volume);
 
     // Share picker
     ctor.Bind("show_share_picker", &show_share_picker);
@@ -244,6 +245,11 @@ bool LobbyModel::init(Rml::Context* context) {
             if (on_stop_watching) on_stop_watching();
         });
 
+    ctor.BindEventCallback("stream_volume_changed",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_stream_volume_changed) on_stream_volume_changed(stream_volume);
+        });
+
     // Admin event callbacks
     ctor.BindEventCallback("show_create_channel_form",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
@@ -366,6 +372,7 @@ void LobbyModel::dirty_all() {
     dirty("someone_sharing");
     dirty("sharers");
     dirty("viewing_sharer_id");
+    dirty("stream_volume");
     dirty("show_share_picker");
     dirty("share_targets");
     dirty("my_role");

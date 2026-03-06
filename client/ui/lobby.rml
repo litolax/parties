@@ -338,6 +338,12 @@
                             </div>
                         </div>
                     </div>
+                    <div class="stream-volume-control">
+                        <svg class="stream-volume-icon" src="icon-volume.svg" width="16" height="16" />
+                        <input type="range" class="stream-volume-slider" min="0" max="2" step="0.01"
+                               data-value="stream_volume"
+                               data-event-change="stream_volume_changed" />
+                    </div>
                     <div class="sharer-close" data-event-click="stop_watching">
                         <div class="close-icon-a"></div>
                         <div class="close-icon-b"></div>

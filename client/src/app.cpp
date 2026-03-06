@@ -186,6 +186,11 @@ void App::setup_model_callbacks() {
         stop_watching();
     };
 
+    model_.on_stream_volume_changed = [this](float vol) {
+        stream_audio_player_.set_volume(vol);
+        settings_.set_pref("audio.stream_volume", std::to_string(vol));
+    };
+
     // Admin operations
     model_.on_create_channel = [this]() {
         if (!authenticated_) return;
@@ -876,6 +881,19 @@ bool App::init(HWND hwnd) {
     // UI sound effects (own playback device, always running)
     sound_player_.init();
 
+    // Stream audio playback (own device, for screen share audio)
+    stream_audio_player_.init();
+
+    // Load saved stream volume
+    {
+        auto vol_str = settings_.get_pref("audio.stream_volume");
+        if (vol_str) {
+            float vol = std::strtof(vol_str->c_str(), nullptr);
+            stream_audio_player_.set_volume(vol);
+            model_.stream_volume = vol;
+        }
+    }
+
     // Wire audio to network (QUIC TLS encrypts in transit)
     audio_.set_mixer(&mixer_);
     audio_.on_encoded_frame = [this](const uint8_t* data, size_t len) {
@@ -910,6 +928,15 @@ bool App::init(HWND hwnd) {
             if (sender_id == user_id_) return;
             on_video_frame_received(sender_id, data + 5, len - 5);
         }
+        else if (type == parties::protocol::STREAM_AUDIO_PACKET_TYPE) {
+            // Format: [type(1)][sender_id(4)][opus_data(N)]
+            if (len < 6) return;
+            uint32_t sender_id;
+            std::memcpy(&sender_id, data + 1, 4);
+            if (sender_id == user_id_) return;
+            if (sender_id == viewing_sharer_)
+                stream_audio_player_.push_packet(data + 5, len - 5);
+        }
         else if (type == parties::protocol::VIDEO_CONTROL_TYPE) {
             // Format: [type(1)][subtype(1)][data...] — no sender_id prefix
             if (len >= 2 && data[1] == parties::protocol::VIDEO_CTL_PLI && encoder_) {
@@ -927,6 +954,8 @@ bool App::init(HWND hwnd) {
         sharing_screen_ = false;
         if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
         if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
+        if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
+        stream_audio_player_.clear();
         capture_targets_.clear();
         clear_all_sharers();
         video_frame_number_ = 0;
@@ -997,6 +1026,8 @@ bool App::init(HWND hwnd) {
 }
 
 void App::shutdown() {
+    if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
+    stream_audio_player_.shutdown();
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     stop_decode_thread();
@@ -1620,7 +1651,17 @@ void App::start_screen_share(int target_index) {
     // capture_ was already initialized in show_share_picker()
     if (!capture_) return;
 
-    if (!capture_->start(capture_targets_[target_index])) {
+    const auto& target = capture_targets_[target_index];
+
+    // Get process ID for window-specific audio capture
+    uint32_t target_process_id = 0;
+    if (target.type == CaptureTarget::Type::Window && target.handle) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(static_cast<HWND>(target.handle), &pid);
+        target_process_id = static_cast<uint32_t>(pid);
+    }
+
+    if (!capture_->start(target)) {
         std::fprintf(stderr, "[App] Failed to start capture\n");
         capture_->shutdown();
         capture_.reset();
@@ -1687,6 +1728,24 @@ void App::start_screen_share(int target_index) {
         }
     };
 
+    // Start loopback audio capture (process-specific for windows, system-wide for monitors)
+    stream_audio_capture_ = std::make_unique<StreamAudioCapture>();
+    if (stream_audio_capture_->init(target_process_id)) {
+        stream_audio_capture_->on_encoded_frame = [this](const uint8_t* data, size_t len) {
+            if (!sharing_screen_ || !authenticated_) return;
+
+            // Packet: [STREAM_AUDIO_PACKET_TYPE(1)][opus_data(N)]
+            std::vector<uint8_t> pkt(1 + len);
+            pkt[0] = protocol::STREAM_AUDIO_PACKET_TYPE;
+            std::memcpy(pkt.data() + 1, data, len);
+            net_.send_data(pkt.data(), pkt.size());
+        };
+        stream_audio_capture_->start();
+    } else {
+        std::fprintf(stderr, "[App] Loopback audio capture unavailable (continuing without)\n");
+        stream_audio_capture_.reset();
+    }
+
     // Send SCREEN_SHARE_START to server (don't set sharing_screen_ until confirmed)
     VideoCodecId codec = encoder_->codec();
     BinaryWriter writer;
@@ -1713,6 +1772,7 @@ void App::stop_screen_share() {
         viewing_sharer_ = 0;
     }
 
+    if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     video_frame_number_ = 0;
@@ -1852,6 +1912,7 @@ void App::on_screen_share_denied(const uint8_t* data, size_t len) {
     std::fprintf(stderr, "[App] Screen share denied: %s\n", reason.c_str());
 
     // Clean up capture/encoder we set up optimistically
+    if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     capture_targets_.clear();
@@ -1870,6 +1931,7 @@ void App::watch_sharer(UserId id) {
     if (viewing_sharer_ != 0) {
         stop_decode_thread();
         if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
+        stream_audio_player_.clear();
 
         if (doc_) {
             auto* elem = doc_->GetElementById("screen-share");
@@ -1912,6 +1974,7 @@ void App::stop_watching() {
 
     stop_decode_thread();
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
+    stream_audio_player_.clear();
 
     if (doc_) {
         auto* elem = doc_->GetElementById("screen-share");
@@ -1943,6 +2006,7 @@ void App::send_pli(UserId target) {
 void App::clear_all_sharers() {
     stop_decode_thread();
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
+    stream_audio_player_.clear();
 
     active_sharers_.clear();
     viewing_sharer_ = 0;

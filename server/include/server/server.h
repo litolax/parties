@@ -40,6 +40,7 @@ private:
 
     // Screen sharing
     void forward_video_frame(const DataPacket& pkt);
+    void forward_stream_audio(const DataPacket& pkt);
     void handle_video_control(const DataPacket& pkt);
     void stop_screen_share(ChannelId channel_id, UserId user_id);
 
