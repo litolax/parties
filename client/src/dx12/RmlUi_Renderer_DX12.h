@@ -308,6 +308,9 @@ public:
 		void Free_Texture(Gfx::FramebufferData* p_texture);
 		void Free_Texture(TextureHandleType* p_allocated_texture_with_class, bool is_rt, D3D12MA::VirtualAllocation& allocation);
 
+		// Re-uploads pixel data to an existing texture (no resource/SRV reallocation).
+		void Reupload(TextureHandleType* p_texture_handle, const D3D12_RESOURCE_DESC& desc, const Rml::byte* p_data);
+
 		bool Is_Initialized() const;
 
 	private:
@@ -459,6 +462,10 @@ public:
 	Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
 	Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) override;
 	void ReleaseTexture(Rml::TextureHandle texture_handle) override;
+
+	// Updates pixel data of an existing texture in-place (no resource/SRV reallocation).
+	// Dimensions must match the original texture. For streaming video.
+	void UpdateTextureData(Rml::TextureHandle texture_handle, Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions);
 
 	void SetTransform(const Rml::Matrix4f* transform) override;
 

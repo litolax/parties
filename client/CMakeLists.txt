@@ -79,7 +79,6 @@ target_link_libraries(parties_client
         dav1d::dav1d
         ${SPEEXDSP_LIBRARY}
         d3d12 dxgi d3dcompiler
-        dcomp
         windowsapp
         dwmapi
 )

@@ -158,8 +158,8 @@ private:
     uint32_t shared_width_ = 0, shared_height_ = 0;
     uint32_t shared_y_stride_ = 0, shared_uv_stride_ = 0;
 
-    // BGRA conversion buffer for DComp video surface
-    std::vector<uint8_t> bgra_buffer_;
+    // RGBA conversion buffer for video texture
+    std::vector<uint8_t> rgba_buffer_;
 
     // UI document
     Rml::ElementDocument* doc_ = nullptr;

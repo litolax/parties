@@ -6,8 +6,6 @@
 #include <RmlUi/Debugger.h>
 #include <RmlUi/Core/StyleSheetSpecification.h>
 
-#include <dcomp.h>
-
 #include <cstdio>
 #include <cstring>
 
@@ -56,30 +54,6 @@ bool UiManager::init(HWND hwnd) {
     }
 
     Rml::SetRenderInterface(render_interface_.get());
-
-    // Set up DirectComposition visual tree.
-    // The main swapchain (CreateSwapChainForComposition) must be bound to a DComp
-    // visual for anything to appear on screen.
-    {
-        HRESULT hr = DCompositionCreateDevice2(nullptr, IID_PPV_ARGS(&dcomp_device_));
-        if (FAILED(hr)) {
-            std::fprintf(stderr, "[UI] Failed to create DComp device (0x%08lX)\n", hr);
-            return false;
-        }
-
-        hr = dcomp_device_->CreateTargetForHwnd(hwnd, TRUE, &dcomp_target_);
-        if (FAILED(hr)) {
-            std::fprintf(stderr, "[UI] Failed to create DComp target (0x%08lX)\n", hr);
-            return false;
-        }
-
-        dcomp_device_->CreateVisual(&root_visual_);
-        dcomp_device_->CreateVisual(&ui_visual_);
-        ui_visual_->SetContent(render_interface_->Get_SwapChain());
-        root_visual_->AddVisual(ui_visual_, TRUE, nullptr);
-        dcomp_target_->SetRoot(root_visual_);
-        dcomp_device_->Commit();
-    }
 
     if (!Rml::Initialise()) {
         std::fprintf(stderr, "[UI] Failed to initialise RmlUi\n");
@@ -130,20 +104,12 @@ bool UiManager::init(HWND hwnd) {
 void UiManager::shutdown() {
     if (!initialised_) return;
 
-    destroy_video_surface();
-
     text_input_editor_.reset();
     if (context_) {
         Rml::RemoveContext("main");
         context_ = nullptr;
     }
     Rml::Shutdown();
-
-    // Release DComp objects before the renderer (which owns the swapchain)
-    if (ui_visual_)    { ui_visual_->Release();    ui_visual_    = nullptr; }
-    if (root_visual_)  { root_visual_->Release();  root_visual_  = nullptr; }
-    if (dcomp_target_) { dcomp_target_->Release(); dcomp_target_ = nullptr; }
-    if (dcomp_device_) { dcomp_device_->Release(); dcomp_device_ = nullptr; }
 
     render_interface_.reset();
     system_interface_.reset();
@@ -176,10 +142,7 @@ void UiManager::update() {
 
 void UiManager::render() {
     if (!render_interface_ || !*render_interface_) return;
-    if (hwnd_ && IsIconic(hwnd_)) {
-        was_minimized_ = true;
-        return;
-    }
+    if (hwnd_ && IsIconic(hwnd_)) return;
 
     render_interface_->BeginFrame();
     render_interface_->Clear();
@@ -193,16 +156,6 @@ void UiManager::on_resize(int width, int height) {
         render_interface_->SetViewport(width, height);
     if (context_)
         context_->SetDimensions(Rml::Vector2i(width, height));
-
-    // After restoring from minimize, re-bind swapchain to DComp visual.
-    // DWM may release the composition surface reference while minimized.
-    if (was_minimized_ && ui_visual_ && render_interface_) {
-        ui_visual_->SetContent(render_interface_->Get_SwapChain());
-        was_minimized_ = false;
-    }
-
-    if (dcomp_device_)
-        dcomp_device_->Commit();
 }
 
 void UiManager::on_dpi_change(float scale) {
@@ -224,227 +177,6 @@ void UiManager::bind_event(const std::string& element_id, const std::string& eve
             return;
         }
     }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Video surface (DirectComposition overlay)
-// ═══════════════════════════════════════════════════════════════════════
-
-void UiManager::create_video_surface(uint32_t width, uint32_t height) {
-    if (video_swapchain_) destroy_video_surface();
-    if (!render_interface_ || !dcomp_device_) return;
-
-    auto* device = render_interface_->Get_Device();
-    auto* queue  = render_interface_->Get_CommandQueue();
-
-    // Create DXGI factory for the video swapchain
-    IDXGIFactory4* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) {
-        std::fprintf(stderr, "[UI] Failed to create DXGI factory for video (0x%08lX)\n", hr);
-        return;
-    }
-
-    // Create BGRA composition swapchain for video
-    DXGI_SWAP_CHAIN_DESC1 desc = {};
-    desc.Width       = width;
-    desc.Height      = height;
-    desc.Format      = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SampleDesc  = {1, 0};
-    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.BufferCount = 2;
-    desc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-    desc.AlphaMode   = DXGI_ALPHA_MODE_IGNORE;
-
-    IDXGISwapChain1* sc1 = nullptr;
-    hr = factory->CreateSwapChainForComposition(queue, &desc, nullptr, &sc1);
-    factory->Release();
-    if (FAILED(hr)) {
-        std::fprintf(stderr, "[UI] Failed to create video swapchain (0x%08lX)\n", hr);
-        return;
-    }
-
-    sc1->QueryInterface(IID_PPV_ARGS(&video_swapchain_));
-    sc1->Release();
-    video_sc_width_  = width;
-    video_sc_height_ = height;
-
-    // Command allocator + list for video uploads
-    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                   IID_PPV_ARGS(&video_cmd_alloc_));
-    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                              video_cmd_alloc_, nullptr,
-                              IID_PPV_ARGS(&video_cmd_list_));
-    video_cmd_list_->Close();
-
-    // Fence for synchronizing video uploads
-    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&video_fence_));
-    video_fence_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    video_fence_val_ = 0;
-
-    // Staging buffer (upload heap) sized to match the back buffer layout
-    ID3D12Resource* back_buffer = nullptr;
-    video_swapchain_->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-    D3D12_RESOURCE_DESC bb_desc = back_buffer->GetDesc();
-    back_buffer->Release();
-
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-    UINT64 total_bytes;
-    device->GetCopyableFootprints(&bb_desc, 0, 1, 0, &footprint, nullptr, nullptr, &total_bytes);
-    video_staging_row_pitch_ = footprint.Footprint.RowPitch;
-
-    D3D12_HEAP_PROPERTIES heap_props = {};
-    heap_props.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC buf_desc = {};
-    buf_desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-    buf_desc.Width            = total_bytes;
-    buf_desc.Height           = 1;
-    buf_desc.DepthOrArraySize = 1;
-    buf_desc.MipLevels        = 1;
-    buf_desc.SampleDesc.Count = 1;
-    buf_desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    device->CreateCommittedResource(&heap_props, D3D12_HEAP_FLAG_NONE,
-                                    &buf_desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                    nullptr, IID_PPV_ARGS(&video_staging_));
-
-    // Create DComp visual for video (above the UI visual = in front)
-    dcomp_device_->CreateVisual(&video_visual_);
-    video_visual_->SetContent(video_swapchain_);
-    root_visual_->AddVisual(video_visual_, TRUE, ui_visual_);
-    dcomp_device_->Commit();
-
-    std::printf("[UI] Created video surface %ux%u\n", width, height);
-}
-
-void UiManager::destroy_video_surface() {
-    if (!video_swapchain_) return;
-
-    // Wait for all GPU work on this path to complete
-    if (video_fence_ && render_interface_) {
-        auto* queue = render_interface_->Get_CommandQueue();
-        ++video_fence_val_;
-        queue->Signal(video_fence_, video_fence_val_);
-        if (video_fence_->GetCompletedValue() < video_fence_val_) {
-            video_fence_->SetEventOnCompletion(video_fence_val_, video_fence_event_);
-            WaitForSingleObject(static_cast<HANDLE>(video_fence_event_), INFINITE);
-        }
-    }
-
-    // Remove visual from tree
-    if (video_visual_ && root_visual_) {
-        root_visual_->RemoveVisual(video_visual_);
-        if (dcomp_device_) dcomp_device_->Commit();
-    }
-
-    if (video_visual_)      { video_visual_->Release();      video_visual_      = nullptr; }
-    if (video_staging_)     { video_staging_->Release();     video_staging_     = nullptr; }
-    if (video_cmd_list_)    { video_cmd_list_->Release();    video_cmd_list_    = nullptr; }
-    if (video_cmd_alloc_)   { video_cmd_alloc_->Release();   video_cmd_alloc_   = nullptr; }
-    if (video_fence_event_) { CloseHandle(static_cast<HANDLE>(video_fence_event_)); video_fence_event_ = nullptr; }
-    if (video_fence_)       { video_fence_->Release();       video_fence_       = nullptr; }
-    if (video_swapchain_)   { video_swapchain_->Release();   video_swapchain_   = nullptr; }
-
-    video_sc_width_  = 0;
-    video_sc_height_ = 0;
-    video_fence_val_ = 0;
-    video_staging_row_pitch_ = 0;
-}
-
-void UiManager::present_video_frame(const uint8_t* bgra_data,
-                                     uint32_t width, uint32_t height,
-                                     uint32_t stride) {
-    if (!video_swapchain_ || !video_cmd_alloc_ || !render_interface_) return;
-    if (width != video_sc_width_ || height != video_sc_height_) return;
-
-    auto* queue = render_interface_->Get_CommandQueue();
-
-    // Wait for previous video frame's GPU work
-    if (video_fence_->GetCompletedValue() < video_fence_val_) {
-        video_fence_->SetEventOnCompletion(video_fence_val_, video_fence_event_);
-        WaitForSingleObject(static_cast<HANDLE>(video_fence_event_), INFINITE);
-    }
-
-    video_cmd_alloc_->Reset();
-    video_cmd_list_->Reset(video_cmd_alloc_, nullptr);
-
-    // Get current back buffer
-    UINT bb_index = video_swapchain_->GetCurrentBackBufferIndex();
-    ID3D12Resource* back_buffer = nullptr;
-    video_swapchain_->GetBuffer(bb_index, IID_PPV_ARGS(&back_buffer));
-
-    // Copy BGRA pixel data into staging buffer (respecting row pitch alignment)
-    uint8_t* mapped = nullptr;
-    video_staging_->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
-    for (uint32_t y = 0; y < height; y++) {
-        std::memcpy(mapped + y * video_staging_row_pitch_,
-                    bgra_data + y * stride,
-                    width * 4);
-    }
-    video_staging_->Unmap(0, nullptr);
-
-    // Transition back buffer: PRESENT → COPY_DEST
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource    = back_buffer;
-    barrier.Transition.StateBefore  = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter   = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.Subresource  = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    video_cmd_list_->ResourceBarrier(1, &barrier);
-
-    // Copy from staging buffer to back buffer texture
-    D3D12_TEXTURE_COPY_LOCATION src = {};
-    src.pResource = video_staging_;
-    src.Type      = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    src.PlacedFootprint.Offset                = 0;
-    src.PlacedFootprint.Footprint.Format      = DXGI_FORMAT_B8G8R8A8_UNORM;
-    src.PlacedFootprint.Footprint.Width       = width;
-    src.PlacedFootprint.Footprint.Height      = height;
-    src.PlacedFootprint.Footprint.Depth       = 1;
-    src.PlacedFootprint.Footprint.RowPitch    = video_staging_row_pitch_;
-
-    D3D12_TEXTURE_COPY_LOCATION dst = {};
-    dst.pResource        = back_buffer;
-    dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dst.SubresourceIndex = 0;
-
-    video_cmd_list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-
-    // Transition back buffer: COPY_DEST → PRESENT
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-    video_cmd_list_->ResourceBarrier(1, &barrier);
-
-    video_cmd_list_->Close();
-    ID3D12CommandList* lists[] = { video_cmd_list_ };
-    queue->ExecuteCommandLists(1, lists);
-
-    // Signal fence and present
-    ++video_fence_val_;
-    queue->Signal(video_fence_, video_fence_val_);
-    video_swapchain_->Present(1, 0);
-
-    back_buffer->Release();
-}
-
-void UiManager::update_video_position(float x, float y, float w, float h) {
-    if (!video_visual_ || !dcomp_device_) return;
-
-    video_visual_->SetOffsetX(x);
-    video_visual_->SetOffsetY(y);
-
-    // Scale the video swapchain content to match the element display size
-    if (video_sc_width_ > 0 && video_sc_height_ > 0) {
-        float sx = w / static_cast<float>(video_sc_width_);
-        float sy = h / static_cast<float>(video_sc_height_);
-        D2D_MATRIX_3X2_F matrix = {};
-        matrix._11 = sx;
-        matrix._22 = sy;
-        video_visual_->SetTransform(matrix);
-    }
-
-    dcomp_device_->Commit();
 }
 
 // ═══════════════════════════════════════════════════════════════════════

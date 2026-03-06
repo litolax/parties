@@ -1933,6 +1933,27 @@ void RenderInterface_DX12::ReleaseTexture(Rml::TextureHandle texture_handle)
 	}
 }
 
+void RenderInterface_DX12::UpdateTextureData(Rml::TextureHandle texture_handle, Rml::Span<const Rml::byte> source_data,
+	Rml::Vector2i source_dimensions)
+{
+	RMLUI_ZoneScopedN("DirectX 12 - UpdateTextureData");
+
+	TextureHandleType* p_texture = reinterpret_cast<TextureHandleType*>(texture_handle);
+	if (!p_texture || !source_data.data())
+		return;
+
+	D3D12_RESOURCE_DESC desc_texture{};
+	desc_texture.MipLevels = 1;
+	desc_texture.DepthOrArraySize = 1;
+	desc_texture.Format = RMLUI_RENDER_BACKEND_FIELD_COLOR_TEXTURE_FORMAT;
+	desc_texture.Width = source_dimensions.x;
+	desc_texture.Height = source_dimensions.y;
+	desc_texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	desc_texture.SampleDesc.Count = 1;
+
+	m_manager_texture.Reupload(p_texture, desc_texture, source_data.data());
+}
+
 void RenderInterface_DX12::SetTransform(const Rml::Matrix4f* transform)
 {
 	RMLUI_ZoneScopedN("DirectX 12 - SetTransform");
@@ -4661,8 +4682,6 @@ void RenderInterface_DX12::Initialize_Swapchain(int width, int height) noexcept
 	RMLUI_ASSERTMSG(width >= 0, "must not be a negative value");
 	RMLUI_ASSERTMSG(height >= 0, "must not be a negative value");
 
-	// CreateSwapChainForComposition requires explicit non-zero dimensions
-	// (unlike CreateSwapChainForHwnd which auto-detects from the window).
 	if (width <= 0 || height <= 0)
 	{
 		RECT rc;
@@ -4711,8 +4730,8 @@ void RenderInterface_DX12::Initialize_Swapchain(int width, int height) noexcept
 
 	IDXGISwapChain1* p_swapchain1{};
 
-	RMLUI_DX_VERIFY_MSG(p_factory->CreateSwapChainForComposition(m_p_command_queue, &desc, nullptr, &p_swapchain1),
-		"failed to CreateSwapChainForComposition");
+	RMLUI_DX_VERIFY_MSG(p_factory->CreateSwapChainForHwnd(m_p_command_queue, static_cast<HWND>(m_p_window_handle), &desc, nullptr, nullptr, &p_swapchain1),
+		"failed to CreateSwapChainForHwnd");
 
 	RMLUI_DX_VERIFY_MSG(p_swapchain1->QueryInterface(IID_PPV_ARGS(&p_swapchain)), "failed to QueryInterface of IDXGISwapChain4");
 
@@ -9661,6 +9680,135 @@ void RenderInterface_DX12::TextureMemoryManager::Upload(bool is_committed, Textu
 
 		auto ref_count = p_allocation->Release();
 		RMLUI_ASSERTMSG(ref_count == 0, "leak!");
+	}
+#endif
+}
+
+void RenderInterface_DX12::TextureMemoryManager::Reupload(TextureHandleType* p_texture_handle, const D3D12_RESOURCE_DESC& desc,
+	const Rml::byte* p_data)
+{
+	RMLUI_ZoneScopedN("DirectX 12 - TextureMemoryManager::Reupload");
+	RMLUI_ASSERTMSG(p_texture_handle, "must be valid!");
+	RMLUI_ASSERTMSG(p_data, "must be valid!");
+	RMLUI_ASSERTMSG(m_p_device, "must be valid!");
+	RMLUI_ASSERTMSG(m_p_copy_command_list, "must be valid!");
+	RMLUI_ASSERTMSG(m_p_copy_queue, "must be valid!");
+
+	// Get the existing D3D12 resource from the handle
+	ID3D12Resource* p_resource{};
+	bool is_committed = (p_texture_handle->Get_Info().buffer_index == -1);
+	if (is_committed)
+	{
+		auto* p_alloc = static_cast<D3D12MA::Allocation*>(p_texture_handle->Get_Resource());
+		p_resource = p_alloc->GetResource();
+	}
+	else
+	{
+		p_resource = static_cast<ID3D12Resource*>(p_texture_handle->Get_Resource());
+	}
+
+	RMLUI_ASSERTMSG(p_resource, "texture resource must be valid!");
+
+	auto upload_size = GetRequiredIntermediateSize(p_resource, 0, 1);
+
+	// Reset command allocator and list
+	if (m_p_command_allocator)
+	{
+		auto status_reset = m_p_command_allocator->Reset();
+		RMLUI_DX_VERIFY_MSG(status_reset, "failed to Reset (command allocator)");
+	}
+
+	if (m_p_copy_command_list)
+	{
+		auto status_reset = m_p_copy_command_list->Reset(m_p_command_allocator, nullptr);
+		RMLUI_DX_VERIFY_MSG(status_reset, "failed to Reset (command list)");
+	}
+
+	// Get or allocate staging buffer
+	D3D12MA::Allocation* p_allocation{};
+	bool was_allocated_temp = false;
+
+#if RMLUI_RENDER_BACKEND_FIELD_STAGING_BUFFER_CACHE_ENABLED == 1
+	p_allocation = m_p_upload_buffer;
+	if (p_allocation->GetResource()->GetDesc().Width < upload_size)
+	{
+		p_allocation = nullptr;
+
+		ID3D12Resource* p_upload_buffer{};
+		D3D12_RESOURCE_DESC buffer_desc{};
+		buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		buffer_desc.Width = upload_size;
+		buffer_desc.Height = 1;
+		buffer_desc.DepthOrArraySize = 1;
+		buffer_desc.MipLevels = 1;
+		buffer_desc.Format = DXGI_FORMAT_UNKNOWN;
+		buffer_desc.SampleDesc.Count = 1;
+		buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+		D3D12MA::ALLOCATION_DESC desc_alloc{};
+		desc_alloc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+		m_p_allocator->CreateResource(&desc_alloc, &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, &p_allocation,
+			IID_PPV_ARGS(&p_upload_buffer));
+
+		was_allocated_temp = true;
+	}
+#else
+	ID3D12Resource* p_upload_buffer{};
+	D3D12_RESOURCE_DESC buffer_desc{};
+	buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	buffer_desc.Width = upload_size;
+	buffer_desc.Height = 1;
+	buffer_desc.DepthOrArraySize = 1;
+	buffer_desc.MipLevels = 1;
+	buffer_desc.Format = DXGI_FORMAT_UNKNOWN;
+	buffer_desc.SampleDesc.Count = 1;
+	buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+	D3D12MA::ALLOCATION_DESC desc_alloc{};
+	desc_alloc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+	m_p_allocator->CreateResource(&desc_alloc, &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, &p_allocation,
+		IID_PPV_ARGS(&p_upload_buffer));
+#endif
+
+	// Fill subresource data and copy
+	D3D12_SUBRESOURCE_DATA desc_data{};
+	desc_data.pData = p_data;
+	desc_data.RowPitch = desc.Width * BytesPerPixel(desc.Format);
+	desc_data.SlicePitch = desc_data.RowPitch * desc.Height;
+
+	UpdateSubresources<1>(m_p_copy_command_list, p_resource, p_allocation->GetResource(), 0, 0, 1, &desc_data);
+
+	// Close and execute
+	m_p_copy_command_list->Close();
+
+	ID3D12CommandList* p_lists[] = {m_p_copy_command_list};
+	m_p_copy_queue->ExecuteCommandLists(1, p_lists);
+
+	// Wait for completion
+	++m_fence_value;
+	m_p_copy_queue->Signal(m_p_fence, m_fence_value);
+	if (m_p_fence->GetCompletedValue() < m_fence_value)
+	{
+		m_p_fence->SetEventOnCompletion(m_fence_value, m_p_fence_event);
+		WaitForSingleObjectEx(m_p_fence_event, INFINITE, FALSE);
+	}
+
+	// Free temp staging buffer if allocated
+#if RMLUI_RENDER_BACKEND_FIELD_STAGING_BUFFER_CACHE_ENABLED == 1
+	if (was_allocated_temp && p_allocation)
+	{
+		if (p_allocation->GetResource())
+			p_allocation->GetResource()->Release();
+		p_allocation->Release();
+	}
+#else
+	if (p_allocation)
+	{
+		if (p_allocation->GetResource())
+			p_allocation->GetResource()->Release();
+		p_allocation->Release();
 	}
 #endif
 }

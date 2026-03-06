@@ -1068,7 +1068,7 @@ void App::update() {
 
     // QUIC datagrams are received via callbacks — no polling needed
 
-    // Deliver latest decoded video frame via DComp video surface
+    // Deliver latest decoded video frame to VideoElement for GPU rendering
     if (new_frame_available_ && doc_) {
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (new_frame_available_) {
@@ -1076,13 +1076,9 @@ void App::update() {
             new_frame_available_ = false;
 
             if (w > 0 && h > 0) {
-                // Ensure DComp video surface exists
-                if (!ui_.has_video_surface())
-                    ui_.create_video_surface(w, h);
-
-                // Convert I420 → BGRA for the DComp video swapchain
-                bgra_buffer_.resize(w * h * 4);
-                uint8_t* dst = bgra_buffer_.data();
+                // Convert I420 → RGBA for RmlUi texture
+                rgba_buffer_.resize(w * h * 4);
+                uint8_t* dst = rgba_buffer_.data();
                 for (uint32_t row = 0; row < h; row++) {
                     const uint8_t* y_row = shared_y_.data() + row * shared_y_stride_;
                     const uint8_t* u_row = shared_u_.data() + (row / 2) * shared_uv_stride_;
@@ -1097,33 +1093,17 @@ void App::update() {
                         int R = (298 * C + 459 * E + 128) >> 8;
                         int G = (298 * C -  55 * D - 136 * E + 128) >> 8;
                         int B = (298 * C + 541 * D + 128) >> 8;
-                        *dst++ = static_cast<uint8_t>(std::clamp(B, 0, 255));
-                        *dst++ = static_cast<uint8_t>(std::clamp(G, 0, 255));
                         *dst++ = static_cast<uint8_t>(std::clamp(R, 0, 255));
+                        *dst++ = static_cast<uint8_t>(std::clamp(G, 0, 255));
+                        *dst++ = static_cast<uint8_t>(std::clamp(B, 0, 255));
                         *dst++ = 255;
                     }
                 }
 
-                // Present to DComp video swapchain
-                ui_.present_video_frame(bgra_buffer_.data(), w, h, w * 4);
-
-                // Update VideoElement layout dimensions (no pixel data)
+                // Upload frame to VideoElement (rendered as textured quad in OnRender)
                 auto* elem = doc_->GetElementById("screen-share");
                 if (elem)
-                    static_cast<VideoElement*>(elem)->SetVideoDimensions(w, h);
-            }
-        }
-    }
-
-    // Sync DComp video visual position with RmlUi element layout
-    if (doc_ && ui_.has_video_surface()) {
-        auto* elem = doc_->GetElementById("screen-share");
-        if (elem) {
-            auto* ve = static_cast<VideoElement*>(elem);
-            if (ve->position_dirty()) {
-                ui_.update_video_position(ve->render_x(), ve->render_y(),
-                                          ve->render_w(), ve->render_h());
-                ve->clear_position_dirty();
+                    static_cast<VideoElement*>(elem)->UpdateFrame(rgba_buffer_.data(), w, h);
             }
         }
     }
@@ -1726,7 +1706,6 @@ void App::stop_screen_share() {
     if (viewing_sharer_ == user_id_) {
         stop_decode_thread();
         if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
-        ui_.destroy_video_surface();
         if (doc_) {
             auto* elem = doc_->GetElementById("screen-share");
             if (elem) static_cast<VideoElement*>(elem)->Clear();
@@ -1891,7 +1870,7 @@ void App::watch_sharer(UserId id) {
     if (viewing_sharer_ != 0) {
         stop_decode_thread();
         if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
-        ui_.destroy_video_surface();
+
         if (doc_) {
             auto* elem = doc_->GetElementById("screen-share");
             if (elem) static_cast<VideoElement*>(elem)->Clear();
@@ -1933,7 +1912,7 @@ void App::stop_watching() {
 
     stop_decode_thread();
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
-    ui_.destroy_video_surface();
+
     if (doc_) {
         auto* elem = doc_->GetElementById("screen-share");
         if (elem) static_cast<VideoElement*>(elem)->Clear();
@@ -1964,7 +1943,7 @@ void App::send_pli(UserId target) {
 void App::clear_all_sharers() {
     stop_decode_thread();
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
-    ui_.destroy_video_surface();
+
     active_sharers_.clear();
     viewing_sharer_ = 0;
     if (doc_) {
