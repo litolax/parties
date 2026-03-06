@@ -402,6 +402,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             join_writer.write_u32(session->user_id);
             join_writer.write_string(session->username);
             join_writer.write_u32(channel_id);
+            join_writer.write_u8(static_cast<uint8_t>(session->role));
 
             auto all = quic_.get_sessions();
             for (auto& s : all) {

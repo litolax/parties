@@ -1469,6 +1469,7 @@ void App::on_user_joined(const uint8_t* data, size_t len) {
     uint32_t uid = reader.read_u32();
     std::string uname = reader.read_string();
     uint32_t channel_id = reader.read_u32();
+    uint8_t urole = reader.has_remaining(1) ? reader.read_u8() : 3;
     if (reader.error()) return;
 
     for (auto& ch : model_.channels) {
@@ -1476,6 +1477,7 @@ void App::on_user_joined(const uint8_t* data, size_t len) {
             ChannelUser user;
             user.id = static_cast<int>(uid);
             user.name = Rml::String(uname);
+            user.role = urole;
             ch.users.push_back(std::move(user));
             ch.user_count = static_cast<int>(ch.users.size());
             break;
