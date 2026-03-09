@@ -26,6 +26,10 @@ public:
     // Flush buffered frames
     void flush();
 
+    // True if the CUDA/NVDEC context was invalidated (e.g., game launch, GPU reset).
+    // Caller should fall back to software decoding.
+    bool context_lost() const { return context_lost_; }
+
     // Callback with decoded NV12 frame
     std::function<void(const parties::client::DecodedFrame& frame)> on_decoded;
 
@@ -57,6 +61,7 @@ private:
     size_t pinned_nv12_size_ = 0;
 
     bool initialized_ = false;
+    bool context_lost_ = false;
 };
 
 } // namespace parties::client::nvidia

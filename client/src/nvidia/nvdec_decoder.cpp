@@ -5,7 +5,24 @@
 #include <cstring>
 #include <parties/profiler.h>
 
+#include <windows.h>
+
 namespace parties::client::nvidia {
+
+// SEH wrapper — must be a plain C-style function (no C++ objects with destructors).
+// Catches access violations from nvcuvid.dll when GPU context is invalidated
+// (e.g., game launch causing device reset/TDR).
+static CUresult seh_cuvidParseVideoData(
+        decltype(CuvidApi::cuvidParseVideoData) fn,
+        CUvideoparser parser, CUVIDSOURCEDATAPACKET* pkt) {
+    __try {
+        return fn(parser, pkt);
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH) {
+        return static_cast<CUresult>(999);  // CUDA_ERROR_UNKNOWN
+    }
+}
 
 NvdecDecoder::NvdecDecoder() = default;
 
@@ -43,7 +60,8 @@ bool NvdecDecoder::init(uint32_t width, uint32_t height) {
 
     res = cuvid_.cuvidGetDecoderCaps(&caps);
     if (res != CUDA_SUCCESS || !caps.bIsSupported) {
-        std::fprintf(stderr, "[NVDEC] AV1 decode not supported by hardware (res=%d)\n", res);
+        std::fprintf(stderr, "[NVDEC] AV1 not supported (res=%d, supported=%d)\n",
+                     res, caps.bIsSupported);
         cuda_.cuCtxDestroy(cu_ctx_);
         cu_ctx_ = nullptr;
         return false;
@@ -83,17 +101,14 @@ bool NvdecDecoder::init(uint32_t width, uint32_t height) {
     CUcontext dummy;
     cuda_.cuCtxPopCurrent(&dummy);
 
-    std::fprintf(stderr, "[NVDEC] Initialized AV1 decoder (NVDEC engines: %u)\n",
-                 caps.nNumNVDECs);
-
     initialized_ = true;
     return true;
 }
 
 void NvdecDecoder::shutdown() {
-    if (!initialized_) return;
+    if (!initialized_ && !context_lost_) return;
 
-    if (cu_ctx_) {
+    if (cu_ctx_ && !context_lost_) {
         cuda_.cuCtxPushCurrent(cu_ctx_);
 
         if (parser_) {
@@ -115,17 +130,29 @@ void NvdecDecoder::shutdown() {
         CUcontext dummy;
         cuda_.cuCtxPopCurrent(&dummy);
         cuda_.cuCtxDestroy(cu_ctx_);
-        cu_ctx_ = nullptr;
     }
 
+    // If context was lost, resources are already gone — just null the pointers
+    cu_ctx_ = nullptr;
+    parser_ = nullptr;
+    decoder_ = nullptr;
+    pinned_nv12_ = nullptr;
+    pinned_nv12_size_ = 0;
     initialized_ = false;
+    context_lost_ = false;
 }
 
 bool NvdecDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     ZoneScopedN("NvdecDecoder::decode");
-    if (!initialized_) return false;
+    if (!initialized_ || context_lost_) return false;
 
-    cuda_.cuCtxPushCurrent(cu_ctx_);
+    CUresult res = cuda_.cuCtxPushCurrent(cu_ctx_);
+    if (res != CUDA_SUCCESS) {
+        std::fprintf(stderr, "[NVDEC] CUDA context lost (cuCtxPushCurrent=%d)\n", res);
+        context_lost_ = true;
+        initialized_ = false;
+        return false;
+    }
 
     CUVIDSOURCEDATAPACKET pkt{};
     pkt.flags = CUVID_PKT_TIMESTAMP;
@@ -133,13 +160,15 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     pkt.payload = data;
     pkt.timestamp = timestamp;
 
-    CUresult res = cuvid_.cuvidParseVideoData(parser_, &pkt);
+    res = seh_cuvidParseVideoData(cuvid_.cuvidParseVideoData, parser_, &pkt);
 
     CUcontext dummy;
     cuda_.cuCtxPopCurrent(&dummy);
 
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidParseVideoData failed: %d\n", res);
+        std::fprintf(stderr, "[NVDEC] cuvidParseVideoData failed: %d (GPU context invalidated)\n", res);
+        context_lost_ = true;
+        initialized_ = false;
         return false;
     }
 
@@ -148,13 +177,13 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
 
 void NvdecDecoder::flush() {
     ZoneScopedN("NvdecDecoder::flush");
-    if (!initialized_) return;
+    if (!initialized_ || context_lost_) return;
 
-    cuda_.cuCtxPushCurrent(cu_ctx_);
+    if (cuda_.cuCtxPushCurrent(cu_ctx_) != CUDA_SUCCESS) return;
 
     CUVIDSOURCEDATAPACKET pkt{};
     pkt.flags = CUVID_PKT_ENDOFSTREAM;
-    cuvid_.cuvidParseVideoData(parser_, &pkt);
+    seh_cuvidParseVideoData(cuvid_.cuvidParseVideoData, parser_, &pkt);
 
     CUcontext dummy;
     cuda_.cuCtxPopCurrent(&dummy);
@@ -175,11 +204,6 @@ int NvdecDecoder::handle_display(void* user, CUVIDPARSERDISPINFO* info) {
 
 int NvdecDecoder::on_sequence(CUVIDEOFORMAT* fmt) {
     ZoneScopedN("NvdecDecoder::on_sequence");
-
-    std::fprintf(stderr, "[NVDEC] on_sequence: %ux%u, bit_depth=%u, chroma=%d, surfaces=%u\n",
-                 fmt->coded_width, fmt->coded_height,
-                 fmt->bit_depth_luma_minus8 + 8, fmt->chroma_format,
-                 fmt->min_num_decode_surfaces);
 
     // Skip invalid sequence headers (garbage from partial data after stream switch).
     // Return positive value to keep the parser alive — returning 0 is fatal.

@@ -40,6 +40,10 @@ public:
 
     VideoCodecId codec() const { return codec_; }
 
+    // True if the hardware decoder's GPU context was invalidated
+    // (e.g., game launch causing device reset). Caller should reinitialize.
+    bool context_lost() const;
+
     // Callback with decoded I420 frame
     std::function<void(const DecodedFrame& frame)> on_decoded;
 

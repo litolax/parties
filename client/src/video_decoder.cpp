@@ -410,4 +410,8 @@ void VideoDecoder::flush() {
     }
 }
 
+bool VideoDecoder::context_lost() const {
+    return nvdec_ && nvdec_->context_lost();
+}
+
 } // namespace parties::client
