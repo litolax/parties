@@ -232,6 +232,7 @@ private:
     std::unordered_map<std::string, PendingPref> pending_prefs_;
     void save_pref_debounced(const std::string& key, std::string value);
     void flush_pending_prefs(bool force = false);
+    void apply_user_audio_prefs(UserId user_id);
 
     // UI document
     Rml::ElementDocument* doc_ = nullptr;

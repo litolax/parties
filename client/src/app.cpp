@@ -247,6 +247,10 @@ void App::setup_model_callbacks() {
         model_.menu_user_role = user_role;
         model_.menu_can_roles = can_roles;
         model_.menu_can_kick = can_kick_user;
+        // Apply saved per-user audio prefs to mixer (in case stream was
+        // created after join and hasn't had prefs applied yet)
+        apply_user_audio_prefs(static_cast<UserId>(user_id));
+
         // Retrieve current volume and compression state from mixer
         model_.menu_user_volume = mixer_.get_user_volume(static_cast<UserId>(user_id));
         model_.menu_user_compress = mixer_.get_user_compression(static_cast<UserId>(user_id));
@@ -283,10 +287,15 @@ void App::setup_model_callbacks() {
 
     model_.on_user_volume_changed = [this](int user_id, float volume) {
         mixer_.set_user_volume(static_cast<UserId>(user_id), volume);
+        auto key = "user." + std::to_string(user_id) + ".volume";
+        save_pref_debounced(key, std::to_string(volume));
     };
 
     model_.on_user_compress_changed = [this](int user_id, bool enabled, float target) {
         mixer_.set_user_compression(static_cast<UserId>(user_id), enabled, target);
+        auto prefix = "user." + std::to_string(user_id);
+        save_pref_debounced(prefix + ".compress", enabled ? "1" : "0");
+        save_pref_debounced(prefix + ".compress_target", std::to_string(target));
     };
 
     model_.on_show_channel_menu = [this](int channel_id, std::string channel_name) {
@@ -1295,6 +1304,26 @@ void App::update_speaking_state() {
         model_.dirty("channels");
 }
 
+void App::apply_user_audio_prefs(UserId user_id) {
+    auto prefix = "user." + std::to_string(user_id);
+
+    auto vol_str = settings_.get_pref(prefix + ".volume");
+    if (vol_str) {
+        float vol = std::strtof(vol_str->c_str(), nullptr);
+        mixer_.set_user_volume(user_id, vol);
+    }
+
+    auto comp_str = settings_.get_pref(prefix + ".compress");
+    if (comp_str) {
+        bool enabled = (*comp_str == "1");
+        float target = 0.8f;
+        auto target_str = settings_.get_pref(prefix + ".compress_target");
+        if (target_str)
+            target = std::strtof(target_str->c_str(), nullptr);
+        mixer_.set_user_compression(user_id, enabled, target);
+    }
+}
+
 void App::save_pref_debounced(const std::string& key, std::string value) {
     pending_prefs_[key] = {std::move(value), std::chrono::steady_clock::now()};
 }
@@ -1682,6 +1711,11 @@ void App::on_channel_user_list(const uint8_t* data, size_t len) {
         for (auto& ch : model_.channels) {
             if (ch.id == static_cast<int>(channel_id)) {
                 model_.current_channel_name = ch.name;
+                // Apply saved per-user audio prefs for everyone in the channel
+                for (auto& u : ch.users) {
+                    if (static_cast<uint32_t>(u.id) != user_id_)
+                        apply_user_audio_prefs(static_cast<UserId>(u.id));
+                }
                 break;
             }
         }
@@ -1714,8 +1748,10 @@ void App::on_user_joined(const uint8_t* data, size_t len) {
         }
     }
 
-    if (channel_id == current_channel_)
+    if (channel_id == current_channel_) {
         sound_player_.play(SoundPlayer::Effect::UserJoined);
+        apply_user_audio_prefs(uid);
+    }
 
     model_.dirty("channels");
 }
