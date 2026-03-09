@@ -94,12 +94,15 @@ public:
     Rml::Vector<ActiveSharer> sharers;      // all active sharers in channel
     int viewing_sharer_id = 0;              // who we're subscribed to (0 = none)
     float stream_volume = 1.0f;             // stream audio volume (0.0 - 2.0)
+    bool stream_fullscreen = false;         // double-click toggles fullscreen stream view
+    int stream_fps = 0;                     // current stream FPS (encode or decode)
 
     // Share picker
     bool show_share_picker = false;
     Rml::Vector<ShareTarget> share_targets;
     int share_codec = 0;           // 0=Auto, 1=H.265, 2=H.264
     float share_bitrate = 2.0f;    // Mbps (0.5 - 10.0)
+    int share_fps = 2;             // 0=15, 1=30, 2=60, 3=120
 
     // Admin / permissions
     int my_role = 3;                       // current user's role (0=Owner..3=User)

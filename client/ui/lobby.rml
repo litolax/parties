@@ -296,9 +296,22 @@
                     </div>
                 </div>
                 <div class="share-setting-group">
+                    <div class="settings-label">FPS</div>
+                    <div class="share-codec-buttons">
+                        <div class="share-codec-btn" data-class-active="share_fps == 0"
+                             data-event-click="select_share_fps(0)">15</div>
+                        <div class="share-codec-btn" data-class-active="share_fps == 1"
+                             data-event-click="select_share_fps(1)">30</div>
+                        <div class="share-codec-btn" data-class-active="share_fps == 2"
+                             data-event-click="select_share_fps(2)">60</div>
+                        <div class="share-codec-btn" data-class-active="share_fps == 3"
+                             data-event-click="select_share_fps(3)">120</div>
+                    </div>
+                </div>
+                <div class="share-setting-group">
                     <div class="settings-label">Bitrate</div>
                     <div class="share-bitrate-row">
-                        <input type="range" class="share-bitrate-slider" min="0.5" max="10" step="0.5"
+                        <input type="range" class="share-bitrate-slider" min="0.5" max="20" step="0.5"
                                data-value="share_bitrate"
                                data-event-change="share_bitrate_changed" />
                         <div class="share-bitrate-value">{{ share_bitrate }} Mbps</div>
@@ -350,7 +363,8 @@
             </div>
 
             <!-- Active stream viewer (subscribed to a sharer) -->
-            <div class="screen-share-area" data-if="viewing_sharer_id > 0">
+            <div class="screen-share-area" data-if="viewing_sharer_id > 0"
+                 data-class-fullscreen="stream_fullscreen">
                 <div class="screen-share-header">
                     <div class="sharer-tabs">
                         <div data-for="sharer : sharers">
@@ -367,12 +381,14 @@
                                data-value="stream_volume"
                                data-event-change="stream_volume_changed" />
                     </div>
+                    <div class="stream-fps">{{ stream_fps }} fps</div>
                     <div class="sharer-close" data-event-click="stop_watching">
                         <div class="close-icon-a"></div>
                         <div class="close-icon-b"></div>
                     </div>
                 </div>
-                <video_frame id="screen-share" />
+                <video_frame id="screen-share"
+                             data-event-dblclick="toggle_stream_fullscreen" />
             </div>
 
             <div class="text-placeholder" data-if="current_channel > 0 && someone_sharing == false">

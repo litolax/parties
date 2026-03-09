@@ -895,12 +895,14 @@ bool App::init(HWND hwnd) {
         }
     }
 
-    // Load saved share settings (codec, bitrate)
+    // Load saved share settings (codec, bitrate, fps)
     {
         auto codec_str = settings_.get_pref("video.share_codec");
         if (codec_str) model_.share_codec = std::atoi(codec_str->c_str());
         auto bitrate_str = settings_.get_pref("video.share_bitrate");
         if (bitrate_str) model_.share_bitrate = std::strtof(bitrate_str->c_str(), nullptr);
+        auto fps_str = settings_.get_pref("video.share_fps");
+        if (fps_str) model_.share_fps = std::atoi(fps_str->c_str());
     }
 
     // Wire audio to network (QUIC TLS encrypts in transit)
@@ -1048,6 +1050,16 @@ void App::shutdown() {
     if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
     stream_audio_player_.shutdown();
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
+    if (encode_thread_.joinable()) {
+        encode_running_.store(false, std::memory_order_release);
+        encode_cv_.notify_one();
+        encode_thread_.join();
+    }
+    if (encoder_ && encode_registered_) {
+        encoder_->unregister_inputs();
+    }
+    for (auto& t : encode_textures_) t.Reset();
+    encode_registered_ = false;
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     stop_decode_thread();
     if (decoder_) { decoder_->shutdown(); decoder_.reset(); }
@@ -1060,6 +1072,12 @@ void App::shutdown() {
 
 void App::update() {
 	ZoneScopedN("App::update");
+    // Check if captured window was closed
+    if (capture_lost_.exchange(false, std::memory_order_relaxed)) {
+        std::fprintf(stderr, "[App] Capture target lost, stopping screen share\n");
+        stop_screen_share();
+    }
+
     // Check async connection progress
     if (awaiting_connection_)
         poll_connecting();
@@ -1091,6 +1109,16 @@ void App::update() {
             }
         }
     }
+
+    // ESC exits fullscreen stream view
+    if (model_.stream_fullscreen && (GetAsyncKeyState(VK_ESCAPE) & 1)) {
+        model_.stream_fullscreen = false;
+        model_.dirty("stream_fullscreen");
+    }
+
+    // Sync OS window fullscreen state with model
+    if (ui_.is_fullscreen() != model_.stream_fullscreen)
+        ui_.set_fullscreen(model_.stream_fullscreen);
 
     // PTT polling — hold key to unmute, release to mute (with optional delay)
     if (model_.ptt_enabled && model_.ptt_key != 0 && current_channel_ != 0) {
@@ -1145,6 +1173,7 @@ void App::update() {
             }
         }
         if (!y.empty() && w > 0 && h > 0) {
+            stream_frame_count_.fetch_add(1, std::memory_order_relaxed);
             auto* elem = doc_->GetElementById("screen-share");
             if (elem) {
                 auto* ve = static_cast<VideoElement*>(elem);
@@ -1187,6 +1216,14 @@ void App::update() {
         if (doc_) {
             if (auto* elem = doc_->GetElementById("titlebar-fps"))
                 elem->SetInnerRML(Rml::String(std::to_string(fps) + " fps"));
+        }
+
+        // Update stream FPS (encode or decode)
+        uint32_t sc = stream_frame_count_.exchange(0, std::memory_order_relaxed);
+        int sfps = static_cast<int>(sc / elapsed);
+        if (sfps != model_.stream_fps) {
+            model_.stream_fps = sfps;
+            model_.dirty("stream_fps");
         }
     }
 
@@ -1872,7 +1909,17 @@ void App::start_screen_share(int target_index) {
         target_process_id = static_cast<uint32_t>(pid);
     }
 
-    if (!capture_->start(target)) {
+    // Map UI codec selection to VideoCodecId
+    VideoCodecId preferred_codec = VideoCodecId::AV1;  // Auto = try AV1 first
+    if (model_.share_codec == 1) preferred_codec = VideoCodecId::H265;
+    else if (model_.share_codec == 2) preferred_codec = VideoCodecId::H264;
+
+    // Map FPS preset index to actual FPS
+    constexpr uint32_t fps_presets[] = {15, 30, 60, 120};
+    int fps_idx = (std::max)(0, (std::min)(model_.share_fps, 3));
+    encode_fps_ = fps_presets[fps_idx];
+
+    if (!capture_->start(target, encode_fps_)) {
         std::fprintf(stderr, "[App] Failed to start capture\n");
         capture_->shutdown();
         capture_.reset();
@@ -1880,34 +1927,16 @@ void App::start_screen_share(int target_index) {
         return;
     }
 
+    capture_->on_closed = [this]() {
+        capture_lost_.store(true, std::memory_order_relaxed);
+    };
+
     capture_targets_.clear();
-
-    uint32_t width = capture_->width();
-    uint32_t height = capture_->height();
-
-    // Map UI codec selection to VideoCodecId
-    VideoCodecId preferred_codec = VideoCodecId::AV1;  // Auto = try AV1 first
-    if (model_.share_codec == 1) preferred_codec = VideoCodecId::H265;
-    else if (model_.share_codec == 2) preferred_codec = VideoCodecId::H264;
-
-    uint32_t bitrate_bps = static_cast<uint32_t>(model_.share_bitrate * 1'000'000.0f);
-    bitrate_bps = (std::max)(bitrate_bps, VIDEO_MIN_BITRATE);
-    bitrate_bps = (std::min)(bitrate_bps, VIDEO_MAX_BITRATE);
 
     // Save share settings
     settings_.set_pref("video.share_codec", std::to_string(model_.share_codec));
     settings_.set_pref("video.share_bitrate", std::to_string(model_.share_bitrate));
-
-    // Create encoder (uses same D3D device as capture)
-    encoder_ = std::make_unique<VideoEncoder>();
-    if (!encoder_->init(capture_->device(), width, height, 0, 0, 60, bitrate_bps, preferred_codec)) {
-        std::fprintf(stderr, "[App] Video encoder init failed\n");
-        capture_->stop();
-        capture_->shutdown();
-        capture_.reset();
-        encoder_.reset();
-        return;
-    }
+    settings_.set_pref("video.share_fps", std::to_string(model_.share_fps));
 
     video_frame_number_ = 0;
 
@@ -1918,35 +1947,13 @@ void App::start_screen_share(int target_index) {
     qpc_frequency_ = freq.QuadPart;
     capture_start_qpc_ = now.QuadPart;
     last_capture_qpc_ = 0;
-    capture_interval_qpc_ = freq.QuadPart / 60;  // 60 FPS target
+    capture_interval_qpc_ = freq.QuadPart / encode_fps_;
 
-    // Wire capture -> encoder (only encodes when sharing_screen_ is true)
-    // Capture fires at display refresh rate (60-144Hz); limit to encoder FPS.
-    capture_->on_frame = [this](ID3D11Texture2D* texture, uint32_t w, uint32_t h) {
-        if (!encoder_ || !sharing_screen_) return;
-
-        // Skip if previous encode is still in progress (GPU busy with game)
-        if (encoding_busy_.load(std::memory_order_relaxed))
-            return;
-
-        // Frame rate limiting: skip frames that arrive faster than target FPS
-        LARGE_INTEGER now;
-        QueryPerformanceCounter(&now);
-        int64_t elapsed = now.QuadPart - last_capture_qpc_;
-        if (elapsed < capture_interval_qpc_)
-            return;
-        last_capture_qpc_ = now.QuadPart;
-
-        // Timestamp in 100ns units relative to capture start
-        int64_t ts = (now.QuadPart - capture_start_qpc_) * 10'000'000LL / qpc_frequency_;
-        encoding_busy_.store(true, std::memory_order_relaxed);
-        encoder_->encode_frame(texture, ts);
-        encoding_busy_.store(false, std::memory_order_relaxed);
-    };
-
-    // Wire encoder -> network send (QUIC TLS encrypts in transit)
-    encoder_->on_encoded = [this](const uint8_t* data, size_t len, bool keyframe) {
-        if (!sharing_screen_ || !authenticated_) return;
+    // Encoder-to-network callback (shared across encoder reinits)
+    stream_frame_count_.store(0, std::memory_order_relaxed);
+    auto on_encoded_cb = [this](const uint8_t* data, size_t len, bool keyframe) {
+        if (!sharing_screen_ || !authenticated_ || !encoder_) return;
+        stream_frame_count_.fetch_add(1, std::memory_order_relaxed);
 
         // Packet: [type(1)][frame_number(4)][timestamp(4)][flags(1)][width(2)][height(2)][codec_id(1)][data(N)]
         uint32_t fn = video_frame_number_++;
@@ -1982,6 +1989,127 @@ void App::start_screen_share(int target_index) {
         }
     };
 
+    // Store callback and codec preference for encode thread
+    encode_on_encoded_ = on_encoded_cb;
+    encode_preferred_codec_ = preferred_codec;
+
+    // Initialize triple-buffer slot state
+    encode_write_slot_ = 0;
+    encode_ready_slot_ = -1;
+    encode_active_slot_ = -1;
+    encode_tex_w_ = 0;
+    encode_tex_h_ = 0;
+    encode_registered_ = false;
+    for (int i = 0; i < ENCODE_SLOTS; i++) {
+        encode_textures_[i].Reset();
+        encode_nvenc_slots_[i] = -1;
+    }
+
+    // Start encode thread before wiring capture callback
+    encode_running_.store(true, std::memory_order_release);
+    encode_thread_ = std::thread([this] { encode_loop(); });
+
+    // Wire capture -> encode thread.
+    // Capture callback: rate-limit, CopyResource to free slot (fast GPU cmd), signal.
+    // Encode thread picks latest slot, encodes directly via NVENC registered input (zero-copy).
+    capture_->on_frame = [this](ID3D11Texture2D* texture, uint32_t w, uint32_t h) {
+        ZoneScopedN("capture::on_frame");
+        if (!sharing_screen_) return;
+
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+
+        // Skip tiny frames (window not yet fully initialized / transitioning)
+        if (desc.Width < 64 || desc.Height < 64)
+            return;
+
+        // Frame rate limiting: skip frames that arrive faster than target FPS
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        int64_t elapsed = now.QuadPart - last_capture_qpc_;
+        if (elapsed < capture_interval_qpc_)
+            return;
+        last_capture_qpc_ = now.QuadPart;
+
+        // Even-align dimensions for encoder
+        uint32_t tex_w = (desc.Width + 1) & ~1u;
+        uint32_t tex_h = (desc.Height + 1) & ~1u;
+
+        // Recreate all staging textures if dimensions changed
+        if (encode_tex_w_ != tex_w || encode_tex_h_ != tex_h) {
+            // Wait for encode thread to finish current frame before recreating textures
+            std::unique_lock<std::mutex> lock(encode_mutex_);
+            encode_cv_.wait(lock, [this] { return encode_active_slot_ < 0; });
+
+            // Unregister old NVENC inputs (encoder reinit will re-register)
+            if (encoder_ && encode_registered_) {
+                encoder_->unregister_inputs();
+                encode_registered_ = false;
+            }
+            for (int i = 0; i < ENCODE_SLOTS; i++) {
+                encode_nvenc_slots_[i] = -1;
+            }
+
+            D3D11_TEXTURE2D_DESC staging_desc{};
+            staging_desc.Width = tex_w;
+            staging_desc.Height = tex_h;
+            staging_desc.MipLevels = 1;
+            staging_desc.ArraySize = 1;
+            staging_desc.Format = desc.Format;
+            staging_desc.SampleDesc.Count = 1;
+            staging_desc.Usage = D3D11_USAGE_DEFAULT;
+            staging_desc.BindFlags = 0;
+
+            for (int i = 0; i < ENCODE_SLOTS; i++) {
+                encode_textures_[i].Reset();
+                HRESULT hr = capture_->device()->CreateTexture2D(
+                    &staging_desc, nullptr, &encode_textures_[i]);
+                if (FAILED(hr)) {
+                    std::fprintf(stderr, "[App] Failed to create staging texture %d: 0x%08lx\n", i, hr);
+                    return;
+                }
+            }
+            encode_tex_w_ = tex_w;
+            encode_tex_h_ = tex_h;
+            encode_write_slot_ = 0;
+            encode_ready_slot_ = -1;
+            // encode_active_slot_ is -1 because we hold the mutex
+        }
+
+        // Pick the pre-computed free write slot
+        int ws;
+        {
+            std::lock_guard<std::mutex> lock(encode_mutex_);
+            ws = encode_write_slot_;
+        }
+
+        // GPU copy to staging texture + flush to ensure the command is submitted
+        // before NVENC tries to read it on the encode thread. Without Flush(),
+        // the D3D11 command buffer accumulates indefinitely (no sync point on
+        // this thread), and NVENC's nvEncMapInputResource can't see pending copies.
+        {
+            ZoneScopedN("capture::CopyResource");
+            capture_->context()->CopyResource(encode_textures_[ws].Get(), texture);
+            capture_->context()->Flush();
+        }
+
+        // Publish this slot as ready and pre-compute next free write slot
+        {
+            std::lock_guard<std::mutex> lock(encode_mutex_);
+            encode_ready_slot_ = ws;
+            encode_ready_ts_ = (now.QuadPart - capture_start_qpc_) * 10'000'000LL / qpc_frequency_;
+
+            // Next write slot: not ready and not active
+            for (int i = 0; i < ENCODE_SLOTS; i++) {
+                if (i != encode_ready_slot_ && i != encode_active_slot_) {
+                    encode_write_slot_ = i;
+                    break;
+                }
+            }
+        }
+        encode_cv_.notify_one();
+    };
+
     // Start loopback audio capture (process-specific for windows, system-wide for monitors)
     stream_audio_capture_ = std::make_unique<StreamAudioCapture>();
     if (stream_audio_capture_->init(target_process_id)) {
@@ -2001,11 +2129,12 @@ void App::start_screen_share(int target_index) {
     }
 
     // Send SCREEN_SHARE_START to server (don't set sharing_screen_ until confirmed)
-    VideoCodecId codec = encoder_->codec();
+    // Encoder isn't created yet (lazy init on first frame), send preferred codec and 0x0 dims.
+    // Actual resolution is in each video frame header.
     BinaryWriter writer;
-    writer.write_u8(static_cast<uint8_t>(codec));
-    writer.write_u16(static_cast<uint16_t>(width));
-    writer.write_u16(static_cast<uint16_t>(height));
+    writer.write_u8(static_cast<uint8_t>(preferred_codec));
+    writer.write_u16(0);
+    writer.write_u16(0);
     net_.send_message(protocol::ControlMessageType::SCREEN_SHARE_START,
                       writer.data().data(), writer.data().size());
 }
@@ -2029,6 +2158,25 @@ void App::stop_screen_share() {
 
     if (stream_audio_capture_) { stream_audio_capture_->stop(); stream_audio_capture_.reset(); }
     if (capture_) { capture_->stop(); capture_->shutdown(); capture_.reset(); }
+
+    // Stop encode thread before destroying encoder (thread may be mid-encode)
+    if (encode_thread_.joinable()) {
+        encode_running_.store(false, std::memory_order_release);
+        encode_cv_.notify_one();
+        encode_thread_.join();
+    }
+    // Unregister NVENC inputs BEFORE freeing staging textures —
+    // NVENC may not AddRef the D3D11 textures on registration.
+    if (encoder_ && encode_registered_) {
+        encoder_->unregister_inputs();
+    }
+    for (auto& t : encode_textures_) t.Reset();
+    encode_tex_w_ = 0;
+    encode_tex_h_ = 0;
+    encode_registered_ = false;
+    for (auto& s : encode_nvenc_slots_) s = -1;
+    encode_on_encoded_ = nullptr;
+
     if (encoder_) { encoder_->shutdown(); encoder_.reset(); }
     video_frame_number_ = 0;
 
@@ -2261,6 +2409,7 @@ void App::stop_watching() {
     }
 
     viewing_sharer_ = 0;
+    model_.stream_fullscreen = false;
 
     // Send unsubscribe to server (only for remote sharers)
     if (!was_self) {
@@ -2314,6 +2463,93 @@ void App::sync_sharer_model() {
     model_.dirty("sharers");
     model_.dirty("someone_sharing");
     model_.dirty("viewing_sharer_id");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Video encode thread — runs blocking NVENC encode off the capture callback
+// ═══════════════════════════════════════════════════════════════════════
+
+void App::encode_loop() {
+    ZoneScopedN("App::encode_loop");
+    TracySetThreadName("VideoEncode");
+
+    while (encode_running_.load(std::memory_order_relaxed)) {
+        int slot = -1;
+        int64_t ts = 0;
+
+        // Wait for a ready frame, then claim it
+        {
+            ZoneScopedN("encode::wait");
+            std::unique_lock<std::mutex> lock(encode_mutex_);
+            encode_cv_.wait(lock, [this] {
+                return encode_ready_slot_ >= 0 ||
+                       !encode_running_.load(std::memory_order_relaxed);
+            });
+
+            if (!encode_running_.load(std::memory_order_relaxed)) break;
+            if (encode_ready_slot_ < 0) continue;
+
+            slot = encode_ready_slot_;
+            ts = encode_ready_ts_;
+            encode_ready_slot_ = -1;
+            encode_active_slot_ = slot;
+        }
+
+        // Check if encoder needs (re)creation — dimensions changed
+        uint32_t w = encode_tex_w_;
+        uint32_t h = encode_tex_h_;
+
+        if (!encoder_ || w != encoder_->width() || h != encoder_->height()) {
+            VideoCodecId codec = encoder_ ? encoder_->codec() : encode_preferred_codec_;
+            encoder_.reset();
+            encode_registered_ = false;
+            auto enc = std::make_unique<VideoEncoder>();
+            uint32_t bitrate_bps = static_cast<uint32_t>(model_.share_bitrate * 1'000'000.0f);
+            bitrate_bps = (std::max)(bitrate_bps, VIDEO_MIN_BITRATE);
+            bitrate_bps = (std::min)(bitrate_bps, VIDEO_MAX_BITRATE);
+            if (!enc->init(capture_->device(), w, h, 0, 0, encode_fps_, bitrate_bps, codec)) {
+                std::fprintf(stderr, "[App] Encoder init failed at %ux%u\n", w, h);
+                {
+                    std::lock_guard<std::mutex> lock(encode_mutex_);
+                    encode_active_slot_ = -1;
+                }
+                encode_cv_.notify_one();
+                continue;
+            }
+            enc->on_encoded = encode_on_encoded_;
+            encoder_ = std::move(enc);
+            video_frame_number_ = 0;
+
+            // Register all staging textures for zero-copy NVENC encode
+            if (encoder_->supports_registered_input()) {
+                bool ok = true;
+                for (int i = 0; i < ENCODE_SLOTS; i++) {
+                    if (encode_textures_[i]) {
+                        encode_nvenc_slots_[i] = encoder_->register_input(encode_textures_[i].Get());
+                        if (encode_nvenc_slots_[i] < 0) { ok = false; break; }
+                    }
+                }
+                encode_registered_ = ok;
+            }
+        }
+
+        // Encode — zero-copy if NVENC registered, otherwise fallback to CopyResource path
+        {
+            ZoneScopedN("encode::frame");
+            if (encode_registered_ && encode_nvenc_slots_[slot] >= 0) {
+                encoder_->encode_registered(encode_nvenc_slots_[slot], ts);
+            } else {
+                encoder_->encode_frame(encode_textures_[slot].Get(), ts);
+            }
+        }
+
+        // Release slot back to free pool + notify (dimension change may be waiting)
+        {
+            std::lock_guard<std::mutex> lock(encode_mutex_);
+            encode_active_slot_ = -1;
+        }
+        encode_cv_.notify_one();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2431,8 +2667,23 @@ void App::decode_loop() {
         // only sees the latest decoded result.
         while (!batch.empty()) {
             auto& work = batch.front();
-            if (decoder_ && !work.data.empty())
+            if (decoder_ && !work.data.empty()) {
                 decoder_->decode(work.data.data(), work.data.size(), work.timestamp);
+
+                // GPU context lost (e.g., game launch) — reinitialize with software decoder
+                if (decoder_->context_lost()) {
+                    std::fprintf(stderr, "[App] NVDEC context lost, falling back to software decoder\n");
+                    auto codec = decoder_->codec();
+                    auto cb = decoder_->on_decoded;
+                    decoder_->shutdown();
+                    decoder_->init(codec, 0, 0);  // Reinit — will fall back to dav1d/MFT
+                    decoder_->on_decoded = cb;
+                    // Request keyframe to restart clean
+                    if (viewing_sharer_ != 0) send_pli(viewing_sharer_);
+                    while (!batch.empty()) batch.pop();
+                    break;
+                }
+            }
             batch.pop();
             if (!decode_running_) break;
         }

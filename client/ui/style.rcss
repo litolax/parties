@@ -1183,6 +1183,22 @@ video_frame {
     background-color: #0d0e17;
 }
 
+/* Fullscreen stream: covers entire window */
+.screen-share-area.fullscreen {
+    position: absolute;
+    left: 0dp;
+    top: 0dp;
+    right: 0dp;
+    bottom: 0dp;
+    padding: 0dp;
+    z-index: 50;
+    background-color: #000000;
+}
+
+.screen-share-area.fullscreen .screen-share-header {
+    display: none;
+}
+
 /* ── Sharer cards (grid of sharers, not yet watching) ── */
 
 .sharer-cards {
@@ -1318,6 +1334,14 @@ video_frame {
     flex: none;
     align-self: center;
     width: 100dp;
+}
+
+.stream-fps {
+    display: block;
+    font-size: 11dp;
+    color: #ffffff88;
+    margin: 0dp 4dp;
+    white-space: nowrap;
 }
 
 /* ── Seed phrase onboarding ──────────────────────── */

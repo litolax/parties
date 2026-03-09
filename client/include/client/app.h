@@ -91,6 +91,9 @@ private:
     void stop_decode_thread();
     void decode_loop();
 
+    // Video encode thread (decouples capture from blocking GPU encode)
+    void encode_loop();
+
     // Model + audio wiring
     void setup_model_callbacks();
     void setup_server_model_callbacks();
@@ -142,6 +145,7 @@ private:
     std::unique_ptr<LevelMeterInstancer> level_meter_instancer_;
     LevelMeterElement* level_meter_ = nullptr;  // owned by RmlUi document
     bool sharing_screen_ = false;
+    std::atomic<bool> capture_lost_{false};  // set from WinRT thread when captured window closes
     uint32_t video_frame_number_ = 0;
 
     // Capture frame rate limiting (QPC-based)
@@ -149,7 +153,30 @@ private:
     int64_t capture_start_qpc_ = 0;
     int64_t last_capture_qpc_ = 0;
     int64_t capture_interval_qpc_ = 0;
-    std::atomic<bool> encoding_busy_{false};
+
+    // Encode thread with triple-buffered staging textures.
+    // Capture callback: CopyResource to free slot (fast GPU cmd), publish slot index.
+    // Encode thread: pick latest slot, encode directly via NVENC registered input (zero-copy).
+    static constexpr int ENCODE_SLOTS = 3;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> encode_textures_[ENCODE_SLOTS];
+    int encode_nvenc_slots_[ENCODE_SLOTS]{-1, -1, -1};  // NVENC registered input indices
+    uint32_t encode_tex_w_ = 0, encode_tex_h_ = 0;
+    bool encode_registered_ = false;  // true = zero-copy NVENC path active
+
+    std::thread encode_thread_;
+    std::atomic<bool> encode_running_{false};
+    std::mutex encode_mutex_;
+    std::condition_variable encode_cv_;
+
+    // Triple-buffer slot management (protected by encode_mutex_)
+    int encode_write_slot_ = 0;    // slot capture will write to next (pre-computed, always free)
+    int encode_ready_slot_ = -1;   // slot with latest frame ready for encode (-1 = none)
+    int encode_active_slot_ = -1;  // slot currently being encoded (-1 = idle)
+    int64_t encode_ready_ts_ = 0;  // timestamp of ready frame
+
+    VideoCodecId encode_preferred_codec_ = VideoCodecId::AV1;
+    uint32_t encode_fps_ = 60;
+    std::function<void(const uint8_t*, size_t, bool)> encode_on_encoded_;
 
     // Stream audio (capture for sharer, playback for viewer)
     std::unique_ptr<StreamAudioCapture> stream_audio_capture_;
@@ -192,9 +219,10 @@ private:
     uint32_t shared_y_stride_ = 0, shared_uv_stride_ = 0;
     bool shared_nv12_ = false;
 
-    // FPS counter
+    // FPS counters
     uint32_t fps_frame_count_ = 0;
     std::chrono::steady_clock::time_point fps_last_update_{std::chrono::steady_clock::now()};
+    std::atomic<uint32_t> stream_frame_count_{0};  // incremented from encode/decode threads
 
     // Debounced preference saves (avoid SQLite writes on every slider tick)
     struct PendingPref {

@@ -91,12 +91,15 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.Bind("sharers",             &sharers);
     ctor.Bind("viewing_sharer_id",   &viewing_sharer_id);
     ctor.Bind("stream_volume",       &stream_volume);
+    ctor.Bind("stream_fullscreen",   &stream_fullscreen);
+    ctor.Bind("stream_fps",         &stream_fps);
 
     // Share picker
     ctor.Bind("show_share_picker", &show_share_picker);
     ctor.Bind("share_targets",     &share_targets);
     ctor.Bind("share_codec",       &share_codec);
     ctor.Bind("share_bitrate",     &share_bitrate);
+    ctor.Bind("share_fps",         &share_fps);
 
     // Admin / permissions
     ctor.Bind("my_role",              &my_role);
@@ -245,6 +248,14 @@ bool LobbyModel::init(Rml::Context* context) {
             }
         });
 
+    ctor.BindEventCallback("select_share_fps",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (!args.empty()) {
+                share_fps = args[0].Get<int>();
+                dirty("share_fps");
+            }
+        });
+
     ctor.BindEventCallback("share_bitrate_changed",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
             // share_bitrate already updated by data binding
@@ -275,6 +286,12 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.BindEventCallback("stream_volume_changed",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
             if (on_stream_volume_changed) on_stream_volume_changed(stream_volume);
+        });
+
+    ctor.BindEventCallback("toggle_stream_fullscreen",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            stream_fullscreen = !stream_fullscreen;
+            dirty("stream_fullscreen");
         });
 
     // Admin event callbacks
@@ -443,10 +460,13 @@ void LobbyModel::dirty_all() {
     dirty("sharers");
     dirty("viewing_sharer_id");
     dirty("stream_volume");
+    dirty("stream_fullscreen");
+    dirty("stream_fps");
     dirty("show_share_picker");
     dirty("share_targets");
     dirty("share_codec");
     dirty("share_bitrate");
+    dirty("share_fps");
     dirty("my_role");
     dirty("can_manage_channels");
     dirty("can_kick");
