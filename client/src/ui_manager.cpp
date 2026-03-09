@@ -233,6 +233,51 @@ bool UiManager::is_maximized() const {
     return hwnd_ && IsZoomed(hwnd_);
 }
 
+void UiManager::set_fullscreen(bool fs) {
+    if (!hwnd_ || fullscreen_ == fs) return;
+
+    if (fs) {
+        // Save current window state
+        saved_style_ = GetWindowLongW(hwnd_, GWL_STYLE);
+        saved_ex_style_ = GetWindowLongW(hwnd_, GWL_EXSTYLE);
+        RECT rc;
+        GetWindowRect(hwnd_, &rc);
+        saved_rect_[0] = rc.left;
+        saved_rect_[1] = rc.top;
+        saved_rect_[2] = rc.right;
+        saved_rect_[3] = rc.bottom;
+
+        // Remove caption and thick frame for true borderless fullscreen
+        SetWindowLongW(hwnd_, GWL_STYLE,
+            saved_style_ & ~(WS_CAPTION | WS_THICKFRAME));
+        SetWindowLongW(hwnd_, GWL_EXSTYLE,
+            saved_ex_style_ & ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE |
+                                WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
+
+        // Cover the full monitor (including taskbar)
+        HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(mon, &mi);
+        SetWindowPos(hwnd_, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_NOZORDER | SWP_FRAMECHANGED);
+    } else {
+        // Restore saved window state
+        SetWindowLongW(hwnd_, GWL_STYLE, saved_style_);
+        SetWindowLongW(hwnd_, GWL_EXSTYLE, saved_ex_style_);
+        SetWindowPos(hwnd_, nullptr,
+            saved_rect_[0], saved_rect_[1],
+            saved_rect_[2] - saved_rect_[0],
+            saved_rect_[3] - saved_rect_[1],
+            SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+
+    fullscreen_ = fs;
+}
+
 TextInputMethodEditor_Win32& UiManager::text_input_editor() {
     return *text_input_editor_;
 }

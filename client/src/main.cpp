@@ -52,8 +52,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_NCCALCSIZE:
         if (wParam == TRUE) {
             // Collapse non-client area for borderless window.
-            // When maximized, constrain to the monitor's work area.
-            if (IsZoomed(hwnd)) {
+            // Fullscreen: use full monitor rect. Maximized: constrain to work area.
+            if (ui && ui->is_fullscreen()) {
+                // Full monitor — no constraint needed, let it cover taskbar
+            } else if (IsZoomed(hwnd)) {
                 auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
                 HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                 MONITORINFO mi{};
@@ -146,10 +148,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         MONITORINFO mi{};
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(mon, &mi);
-        mmi->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
-        mmi->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
-        mmi->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
-        mmi->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+        if (ui && ui->is_fullscreen()) {
+            // Fullscreen: allow full monitor size (cover taskbar)
+            mmi->ptMaxPosition.x = 0;
+            mmi->ptMaxPosition.y = 0;
+            mmi->ptMaxSize.x = mi.rcMonitor.right - mi.rcMonitor.left;
+            mmi->ptMaxSize.y = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        } else {
+            mmi->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
+            mmi->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
+            mmi->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+            mmi->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+        }
         mmi->ptMinTrackSize.x = 800;
         mmi->ptMinTrackSize.y = 600;
         return 0;

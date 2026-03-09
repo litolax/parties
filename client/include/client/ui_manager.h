@@ -51,6 +51,8 @@ public:
     void toggle_maximize();
     void close_window();
     bool is_maximized() const;
+    void set_fullscreen(bool fs);
+    bool is_fullscreen() const { return fullscreen_; }
 
     // Accessors for WndProc in main.cpp
     TextInputMethodEditor_Win32& text_input_editor();
@@ -69,6 +71,10 @@ private:
     float dpi_scale_ = 1.0f;
     bool initialised_ = false;
     bool minimized_ = false;
+    bool fullscreen_ = false;
+    long saved_style_ = 0;
+    long saved_ex_style_ = 0;
+    int saved_rect_[4]{};  // left, top, right, bottom before fullscreen
     class EventListenerInstancer;
     class GenericEventListener;
 };
