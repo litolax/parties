@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
@@ -57,9 +58,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
 
     bool capturing_ = false;
+    bool frame_limited_ = false;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     uint32_t frame_count_ = 0;
+    std::chrono::steady_clock::time_point last_frame_time_{};
 
     // WinRT capture state (pimpl to avoid WinRT headers in this header)
     struct Impl;

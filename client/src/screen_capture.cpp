@@ -4,6 +4,7 @@
 // WinRT / Windows Graphics Capture headers
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
@@ -267,6 +268,7 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
         auto size = impl_->item.Size();
         width_ = static_cast<uint32_t>(size.Width);
         height_ = static_cast<uint32_t>(size.Height);
+        const auto max_frame_time = std::chrono::milliseconds(1000 / target_fps);
 
         // Subscribe to item closed (window closed / monitor disconnected)
         impl_->closed_token = impl_->item.Closed(
@@ -285,7 +287,7 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
 
         // Subscribe to frame arrived events
         impl_->frame_arrived_token = impl_->frame_pool.FrameArrived(
-            [this](Direct3D11CaptureFramePool const& sender,
+            [this, max_frame_time](Direct3D11CaptureFramePool const& sender,
                    winrt::Windows::Foundation::IInspectable const&) {
                 ZoneScopedN("ScreenCapture::FrameArrived");
                 thread_local bool named = (TracySetThreadName("ScreenCapture"), true);
@@ -293,6 +295,17 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
 
                 auto frame = sender.TryGetNextFrame();
                 if (!frame) return;
+
+                // Software frame rate limiting for older Windows without MinUpdateInterval
+                if (!frame_limited_) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto limit = max_frame_time * 9 / 10;  // 90% of target interval
+                    if (now - last_frame_time_ < limit) {
+                        frame.Close();
+                        return;
+                    }
+                    last_frame_time_ = now;
+                }
 
                 auto content_size = frame.ContentSize();
                 uint32_t w = static_cast<uint32_t>(content_size.Width);
@@ -336,15 +349,28 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
         impl_->session = impl_->frame_pool.CreateCaptureSession(impl_->item);
 
         // Remove yellow border and disable cursor compositing (Win10 2004+)
-        try {
-            impl_->session.IsBorderRequired(false);
-        } catch (...) {}
-        try {
-            impl_->session.IsCursorCaptureEnabled(true);
-        } catch (...) {}
-        try {
-            impl_->session.MinUpdateInterval(std::chrono::milliseconds(1000 / target_fps));
-        } catch (...) {}
+        if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired"))
+        {
+            try {
+                impl_->session.IsBorderRequired(false);
+            } catch (...) {}
+        }
+        
+        if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled"))
+        {
+            try {
+                impl_->session.IsCursorCaptureEnabled(true);
+            } catch (...) {}
+        }
+
+        if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"MinUpdateInterval"))
+        {
+            try {
+                impl_->session.MinUpdateInterval(max_frame_time);
+                frame_limited_ = true;
+            }
+            catch (...) {}
+        }
 
         impl_->session.StartCapture();
         capturing_ = true;

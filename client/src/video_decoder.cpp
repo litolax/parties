@@ -1,5 +1,6 @@
 #include <client/video_decoder.h>
 #include "nvidia/nvdec_decoder.h"
+#include "amd/amf_decoder.h"
 
 #include <cstdio>
 #include <cstring>
@@ -200,6 +201,16 @@ bool VideoDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
         }
     }
 
+    // Try AMF second (AMD GPUs)
+    if (!hardware_disabled_) {
+        auto amf = std::make_unique<amd::AmfDecoder>();
+        if (amf->init(codec, width, height)) {
+            amf_ = std::move(amf);
+            initialized_ = true;
+            return true;
+        }
+    }
+
     if (codec == VideoCodecId::AV1) {
         // Fall back to dav1d for AV1
         Dav1dSettings settings;
@@ -317,6 +328,13 @@ void VideoDecoder::shutdown() {
         return;
     }
 
+    if (amf_) {
+        amf_->shutdown();
+        amf_.reset();
+        initialized_ = false;
+        return;
+    }
+
     if (!impl_) return;
 
     if (impl_->dav1d_ctx) {
@@ -341,6 +359,11 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     if (nvdec_) {
         nvdec_->on_decoded = on_decoded;
         return nvdec_->decode(data, len, timestamp);
+    }
+
+    if (amf_) {
+        amf_->on_decoded = on_decoded;
+        return amf_->decode(data, len, timestamp);
     }
 
     if (!impl_) return false;
@@ -402,6 +425,12 @@ void VideoDecoder::flush() {
         return;
     }
 
+    if (amf_) {
+        amf_->on_decoded = on_decoded;
+        amf_->flush();
+        return;
+    }
+
     if (!impl_) return;
 
     if (codec_ == VideoCodecId::AV1) {
@@ -413,7 +442,9 @@ void VideoDecoder::flush() {
 }
 
 bool VideoDecoder::context_lost() const {
-    return nvdec_ && nvdec_->context_lost();
+    if (nvdec_) return nvdec_->context_lost();
+    if (amf_) return amf_->context_lost();
+    return false;
 }
 
 } // namespace parties::client

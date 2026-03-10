@@ -21,6 +21,7 @@ struct IMFMediaEventGenerator;
 struct IMFSample;
 
 namespace parties::client::nvidia { class NvencEncoder; }
+namespace parties::client::amd { class AmfEncoder; }
 
 namespace parties::client {
 
@@ -75,8 +76,9 @@ private:
     bool collect_output();
     void encoder_loop();
 
-    // NVENC (preferred path on NVIDIA GPUs)
+    // Hardware encoder backends (NVENC preferred, AMF second)
     std::unique_ptr<nvidia::NvencEncoder> nvenc_;
+    std::unique_ptr<amd::AmfEncoder> amf_;
 
     // MFT fallback
     Microsoft::WRL::ComPtr<ID3D11Device> device_;

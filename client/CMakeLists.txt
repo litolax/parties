@@ -38,6 +38,9 @@ add_executable(parties_client
     src/nvidia/nvidia_loader.cpp
     src/nvidia/nvenc_encoder.cpp
     src/nvidia/nvdec_decoder.cpp
+    src/amd/amf_loader.cpp
+    src/amd/amf_encoder.cpp
+    src/amd/amf_decoder.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/app.rc"
 )
 

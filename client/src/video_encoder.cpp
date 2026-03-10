@@ -1,5 +1,6 @@
 #include <client/video_encoder.h>
 #include "nvidia/nvenc_encoder.h"
+#include "amd/amf_encoder.h"
 
 #include <mfapi.h>
 #include <mftransform.h>
@@ -48,6 +49,19 @@ bool VideoEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         if (nvenc->init(device, enc_w, enc_h, fps, bitrate, preferred_codec)) {
             nvenc_ = std::move(nvenc);
             codec_ = nvenc_->codec();
+            width_ = enc_w;
+            height_ = enc_h;
+            initialized_ = true;
+            return true;
+        }
+    }
+
+    // Try AMF second (AMD GPUs, direct D3D11)
+    {
+        auto amf = std::make_unique<amd::AmfEncoder>();
+        if (amf->init(device, enc_w, enc_h, fps, bitrate, preferred_codec)) {
+            amf_ = std::move(amf);
+            codec_ = amf_->codec();
             width_ = enc_w;
             height_ = enc_h;
             initialized_ = true;
@@ -165,6 +179,13 @@ void VideoEncoder::shutdown() {
     if (nvenc_) {
         nvenc_->shutdown();
         nvenc_.reset();
+        initialized_ = false;
+        return;
+    }
+
+    if (amf_) {
+        amf_->shutdown();
+        amf_.reset();
         initialized_ = false;
         return;
     }
@@ -458,6 +479,11 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* bgra_texture, int64_t timestamp
         return nvenc_->encode_frame(bgra_texture, timestamp_100ns);
     }
 
+    if (amf_) {
+        amf_->on_encoded = on_encoded;
+        return amf_->encode_frame(bgra_texture, timestamp_100ns);
+    }
+
     int64_t duration = 10'000'000LL / fps_;
 
     // Step 1: Wrap BGRA texture into MF sample
@@ -586,26 +612,36 @@ bool VideoEncoder::collect_output() {
 }
 
 bool VideoEncoder::supports_registered_input() const {
-    return nvenc_ != nullptr;
+    return nvenc_ != nullptr || amf_ != nullptr;
 }
 
 int VideoEncoder::register_input(ID3D11Texture2D* texture) {
-    if (!nvenc_) return -1;
-    return nvenc_->register_input(texture);
+    if (nvenc_) return nvenc_->register_input(texture);
+    if (amf_) return amf_->register_input(texture);
+    return -1;
 }
 
 void VideoEncoder::unregister_inputs() {
     if (nvenc_) nvenc_->unregister_inputs();
+    if (amf_) amf_->unregister_inputs();
 }
 
 bool VideoEncoder::encode_registered(int slot, int64_t timestamp_100ns) {
-    if (!initialized_ || !nvenc_) return false;
-    nvenc_->on_encoded = on_encoded;
-    return nvenc_->encode_registered(slot, timestamp_100ns);
+    if (!initialized_) return false;
+    if (nvenc_) {
+        nvenc_->on_encoded = on_encoded;
+        return nvenc_->encode_registered(slot, timestamp_100ns);
+    }
+    if (amf_) {
+        amf_->on_encoded = on_encoded;
+        return amf_->encode_registered(slot, timestamp_100ns);
+    }
+    return false;
 }
 
 void VideoEncoder::force_keyframe() {
     if (nvenc_) { nvenc_->force_keyframe(); return; }
+    if (amf_) { amf_->force_keyframe(); return; }
     force_keyframe_ = true;
 }
 
@@ -613,6 +649,7 @@ void VideoEncoder::set_bitrate(uint32_t bitrate) {
     if (!initialized_) return;
 
     if (nvenc_) { nvenc_->set_bitrate(bitrate); return; }
+    if (amf_) { amf_->set_bitrate(bitrate); return; }
 
     ComPtr<ICodecAPI> codec_api;
     if (SUCCEEDED(encoder_.As(&codec_api))) {

@@ -7,6 +7,7 @@
 #include <memory>
 
 namespace parties::client::nvidia { class NvdecDecoder; }
+namespace parties::client::amd { class AmfDecoder; }
 
 namespace parties::client {
 
@@ -54,6 +55,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::unique_ptr<nvidia::NvdecDecoder> nvdec_;
+    std::unique_ptr<amd::AmfDecoder> amf_;
     VideoCodecId codec_ = VideoCodecId::AV1;
     bool initialized_ = false;
     bool hardware_disabled_ = false;

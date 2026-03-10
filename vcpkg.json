@@ -19,6 +19,7 @@
     "client": {
       "description": "Client GUI dependencies",
       "dependencies": [
+        "amd-amf",
         "d3d12-memory-allocator",
         "miniaudio",
         "dav1d",

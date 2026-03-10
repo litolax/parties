@@ -2638,9 +2638,14 @@ void App::encode_loop() {
             }
             const char* codec_names[] = {"?", "AV1", "H.265", "H.264"};
             uint8_t ci = static_cast<uint8_t>(enc->codec());
+            const char* backend = "MFT";
+            if (enc->supports_registered_input()) {
+                // NVENC and AMF both support registered input; check which is active
+                // by testing if NVENC member is set (it's tried first)
+                backend = "HW";  // Generic — logged separately by NVENC/AMF init
+            }
             std::fprintf(stderr, "[App] Encoder initialized: %s %s at %ux%u %u fps\n",
-                         enc->supports_registered_input() ? "NVENC" : "MFT",
-                         ci <= 3 ? codec_names[ci] : "?", w, h, encode_fps_);
+                         backend, ci <= 3 ? codec_names[ci] : "?", w, h, encode_fps_);
             enc->on_encoded = encode_on_encoded_;
             encoder_ = std::move(enc);
             video_frame_number_ = 0;
