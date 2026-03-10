@@ -23,6 +23,8 @@
         "d3d12-memory-allocator",
         "miniaudio",
         "dav1d",
+        "libhevc",
+        "openh264",
         {
           "name": "rmlui",
           "features": ["svg"]

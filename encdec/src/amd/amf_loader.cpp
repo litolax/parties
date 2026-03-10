@@ -4,7 +4,7 @@
 #include <windows.h>
 #include <cstdio>
 
-namespace parties::client::amd {
+namespace parties::encdec::amd {
 
 bool load_amf(amf::AMFFactory*& factory) {
     static bool tried = false;
@@ -34,4 +34,4 @@ bool load_amf(amf::AMFFactory*& factory) {
     return true;
 }
 
-} // namespace parties::client::amd
+} // namespace parties::encdec::amd

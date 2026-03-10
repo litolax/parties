@@ -36,6 +36,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 endif()
 
 add_subdirectory(common)
+add_subdirectory(encdec)
 add_subdirectory(server)
 if(BUILD_CLIENT)
     add_subdirectory(client)

@@ -1,0 +1,17 @@
+{
+  "name": "libhevc",
+  "version": "1.7.0",
+  "description": "HEVC (H.265) software encoder and decoder from Ittiam Systems (Apache 2.0)",
+  "homepage": "https://github.com/ittiam-systems/libhevc",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

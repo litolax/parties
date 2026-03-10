@@ -5,7 +5,7 @@
 #include <cstring>
 #include <windows.h>
 
-namespace parties::client::nvidia {
+namespace parties::encdec::nvidia {
 
 template<typename T>
 static bool load_sym(HMODULE mod, const char* name, T& out) {
@@ -128,4 +128,4 @@ bool load_cuvid(CuvidApi& api) {
     return true;
 }
 
-} // namespace parties::client::nvidia
+} // namespace parties::encdec::nvidia

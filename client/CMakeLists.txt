@@ -2,7 +2,6 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(rnnoise CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(D3D12MemoryAllocator CONFIG REQUIRED)
-find_package(dav1d CONFIG REQUIRED)
 find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
 find_path(SPEEXDSP_INCLUDE_DIRS "speex/speex_echo.h")
 find_library(SPEEXDSP_LIBRARY speexdsp)
@@ -35,12 +34,6 @@ add_executable(parties_client
     src/level_meter_element.cpp
     src/stream_audio_capture.cpp
     src/stream_audio_player.cpp
-    src/nvidia/nvidia_loader.cpp
-    src/nvidia/nvenc_encoder.cpp
-    src/nvidia/nvdec_decoder.cpp
-    src/amd/amf_loader.cpp
-    src/amd/amf_encoder.cpp
-    src/amd/amf_decoder.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/app.rc"
 )
 
@@ -80,12 +73,12 @@ target_include_directories(parties_client
 target_link_libraries(parties_client
     PRIVATE
         parties_common
+        parties_encdec
         rnnoise::rnnoise
         unofficial::sqlite3::sqlite3
         RmlUi::RmlUi
         RmlUi::Debugger
         GPUOpen::D3D12MemoryAllocator
-        dav1d::dav1d
         ${SPEEXDSP_LIBRARY}
         d3d12 dxgi d3dcompiler
         windowsapp

@@ -9,33 +9,43 @@
 #include <cstdio>
 #include <cstring>
 
-namespace parties::client::amd {
+namespace parties::encdec::amd {
 
-static const wchar_t* codec_component_id(parties::VideoCodecId codec) {
+static const wchar_t* decoder_component_id(VideoCodecId codec) {
     switch (codec) {
-    case parties::VideoCodecId::AV1:  return AMFVideoDecoderHW_AV1;
-    case parties::VideoCodecId::H265: return AMFVideoDecoderHW_H265_HEVC;
-    case parties::VideoCodecId::H264: return AMFVideoDecoderUVD_H264_AVC;
-    default:                          return AMFVideoDecoderHW_AV1;
-    }
-}
-
-static const char* codec_name(parties::VideoCodecId codec) {
-    switch (codec) {
-    case parties::VideoCodecId::AV1:  return "AV1";
-    case parties::VideoCodecId::H265: return "H.265";
-    case parties::VideoCodecId::H264: return "H.264";
-    default:                          return "unknown";
+    case VideoCodecId::AV1:  return AMFVideoDecoderHW_AV1;
+    case VideoCodecId::H265: return AMFVideoDecoderHW_H265_HEVC;
+    case VideoCodecId::H264: return AMFVideoDecoderUVD_H264_AVC;
+    default:                 return AMFVideoDecoderHW_AV1;
     }
 }
 
 AmfDecoder::AmfDecoder() = default;
 
 AmfDecoder::~AmfDecoder() {
-    shutdown();
+    if (!initialized_ && !context_lost_) return;
+
+    if (decoder_) {
+        if (!context_lost_) {
+            decoder_->Drain();
+            decoder_->Terminate();
+        }
+        decoder_->Release();
+        decoder_ = nullptr;
+    }
+
+    if (context_) {
+        if (!context_lost_)
+            context_->Terminate();
+        context_->Release();
+        context_ = nullptr;
+    }
+
+    initialized_ = false;
+    context_lost_ = false;
 }
 
-bool AmfDecoder::init(parties::VideoCodecId codec, uint32_t width, uint32_t height) {
+bool AmfDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     ZoneScopedN("AmfDecoder::init");
     if (initialized_) return false;
 
@@ -47,7 +57,6 @@ bool AmfDecoder::init(parties::VideoCodecId codec, uint32_t width, uint32_t heig
         return false;
     }
 
-    // Init D3D11 with default AMD GPU (NULL = auto-select)
     res = context_->InitDX11(nullptr);
     if (res != AMF_OK) {
         std::fprintf(stderr, "[AMF] Decoder InitDX11 failed: %d\n", res);
@@ -56,7 +65,7 @@ bool AmfDecoder::init(parties::VideoCodecId codec, uint32_t width, uint32_t heig
         return false;
     }
 
-    const wchar_t* comp_id = codec_component_id(codec);
+    const wchar_t* comp_id = decoder_component_id(codec);
     res = factory_->CreateComponent(context_, comp_id, &decoder_);
     if (res != AMF_OK || !decoder_) {
         std::fprintf(stderr, "[AMF] Decoder CreateComponent(%s) failed: %d\n",
@@ -66,11 +75,9 @@ bool AmfDecoder::init(parties::VideoCodecId codec, uint32_t width, uint32_t heig
         return false;
     }
 
-    // Set low-latency mode
     decoder_->SetProperty(AMF_VIDEO_DECODER_REORDER_MODE,
         static_cast<amf_int64>(AMF_VIDEO_DECODER_MODE_LOW_LATENCY));
 
-    // Use actual dimensions if provided, or small default
     uint32_t w = width > 0 ? width : 1920;
     uint32_t h = height > 0 ? height : 1080;
 
@@ -95,34 +102,10 @@ bool AmfDecoder::init(parties::VideoCodecId codec, uint32_t width, uint32_t heig
     return true;
 }
 
-void AmfDecoder::shutdown() {
-    if (!initialized_ && !context_lost_) return;
-
-    if (decoder_) {
-        if (!context_lost_) {
-            decoder_->Drain();
-            decoder_->Terminate();
-        }
-        decoder_->Release();
-        decoder_ = nullptr;
-    }
-
-    if (context_) {
-        if (!context_lost_)
-            context_->Terminate();
-        context_->Release();
-        context_ = nullptr;
-    }
-
-    initialized_ = false;
-    context_lost_ = false;
-}
-
 bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     ZoneScopedN("AmfDecoder::decode");
     if (!initialized_ || context_lost_) return false;
 
-    // Wrap compressed data in AMF buffer
     amf::AMFBuffer* buffer = nullptr;
     AMF_RESULT res = context_->AllocBuffer(amf::AMF_MEMORY_HOST, len, &buffer);
     if (res != AMF_OK || !buffer) {
@@ -144,7 +127,6 @@ bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
         return false;
     }
 
-    // Poll for decoded output
     while (true) {
         amf::AMFData* out_data = nullptr;
         res = decoder_->QueryOutput(&out_data);
@@ -158,7 +140,6 @@ bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
             continue;
         }
 
-        // Copy to host memory for the decoded frame callback
         res = surface->Convert(amf::AMF_MEMORY_HOST);
         if (res != AMF_OK) {
             surface->Release();
@@ -194,7 +175,6 @@ bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
 void AmfDecoder::flush() {
     if (!initialized_ || !decoder_ || context_lost_) return;
     decoder_->Drain();
-    // Consume remaining output
     while (true) {
         amf::AMFData* data = nullptr;
         AMF_RESULT res = decoder_->QueryOutput(&data);
@@ -204,4 +184,8 @@ void AmfDecoder::flush() {
     decoder_->ReInit(width_, height_);
 }
 
-} // namespace parties::client::amd
+DecoderInfo AmfDecoder::info() const {
+    return {Backend::AMF, codec_};
+}
+
+} // namespace parties::encdec::amd

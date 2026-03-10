@@ -4,10 +4,10 @@
 
 #include <AMF/core/Factory.h>
 
-namespace parties::client::amd {
+namespace parties::encdec::amd {
 
 // Get the AMF factory singleton. Returns false if amfrt64.dll not available.
 // Thread-safe, loads only once.
 bool load_amf(amf::AMFFactory*& factory);
 
-} // namespace parties::client::amd
+} // namespace parties::encdec::amd

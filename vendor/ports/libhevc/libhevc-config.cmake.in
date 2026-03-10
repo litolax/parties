@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/libhevc-targets.cmake")
+
+# Convenience aliases
+if(NOT TARGET libhevc::decoder)
+    add_library(libhevc::decoder ALIAS libhevc::hevcdec)
+endif()
+if(TARGET libhevc::hevcenc AND NOT TARGET libhevc::encoder)
+    add_library(libhevc::encoder ALIAS libhevc::hevcenc)
+endif()

@@ -8,17 +8,36 @@
 #include <parties/profiler.h>
 #include <cstdio>
 
-namespace parties::client::amd {
+namespace parties::encdec::amd {
 
 AmfEncoder::AmfEncoder() = default;
 
 AmfEncoder::~AmfEncoder() {
-    shutdown();
+    if (!initialized_) return;
+
+    if (encoder_) {
+        encoder_->Drain();
+        encoder_->Terminate();
+        encoder_->Release();
+        encoder_ = nullptr;
+    }
+
+    staging_texture_.Reset();
+    d3d_context_.Reset();
+    device_.Reset();
+    num_external_inputs_ = 0;
+
+    if (context_) {
+        context_->Terminate();
+        context_->Release();
+        context_ = nullptr;
+    }
+
+    initialized_ = false;
 }
 
 bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
-                       uint32_t fps, uint32_t bitrate,
-                       parties::VideoCodecId preferred_codec) {
+                       uint32_t fps, uint32_t bitrate, VideoCodecId preferred_codec) {
     ZoneScopedN("AmfEncoder::init");
     if (initialized_) return false;
 
@@ -44,29 +63,20 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     height_ = height;
     fps_ = fps;
 
-    // Try codecs in priority order (preferred first)
-    struct CodecEntry { const wchar_t* id; parties::VideoCodecId codec; };
+    struct CodecEntry { const wchar_t* id; VideoCodecId codec; };
     CodecEntry codecs[] = {
-        {AMFVideoEncoder_AV1,      parties::VideoCodecId::AV1},
-        {AMFVideoEncoder_HEVC,     parties::VideoCodecId::H265},
-        {AMFVideoEncoderVCE_AVC,   parties::VideoCodecId::H264},
+        {AMFVideoEncoder_AV1,    VideoCodecId::AV1},
+        {AMFVideoEncoder_HEVC,   VideoCodecId::H265},
+        {AMFVideoEncoderVCE_AVC, VideoCodecId::H264},
     };
 
     bool found = false;
-    // Try preferred first
     for (auto& c : codecs) {
-        if (c.codec == preferred_codec && try_codec(c.id, c.codec)) {
-            found = true;
-            break;
-        }
+        if (c.codec == preferred_codec && try_codec(c.id, c.codec)) { found = true; break; }
     }
-    // Fall back to others
     if (!found) {
         for (auto& c : codecs) {
-            if (c.codec != preferred_codec && try_codec(c.id, c.codec)) {
-                found = true;
-                break;
-            }
+            if (c.codec != preferred_codec && try_codec(c.id, c.codec)) { found = true; break; }
         }
     }
 
@@ -77,14 +87,10 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         return false;
     }
 
-    const char* codec_name = (codec_ == parties::VideoCodecId::AV1)  ? "AV1"
-                           : (codec_ == parties::VideoCodecId::H265) ? "H.265"
-                                                                      : "H.264";
     std::fprintf(stderr, "[AMF] Selected encoder codec: %s (%ux%u @ %u fps)\n",
-                 codec_name, width, height, fps);
+                 codec_name(codec_), width, height, fps);
 
-    // Configure encoder properties based on codec
-    if (codec_ == parties::VideoCodecId::AV1) {
+    if (codec_ == VideoCodecId::AV1) {
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_USAGE,
             static_cast<amf_int64>(AMF_VIDEO_ENCODER_AV1_USAGE_LOW_LATENCY));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_RATE_CONTROL_METHOD,
@@ -92,10 +98,10 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_FRAMERATE, AMFConstructRate(fps, 1));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_GOP_SIZE,
-            static_cast<amf_int64>(fps * (parties::VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
+            static_cast<amf_int64>(fps * (VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET,
             static_cast<amf_int64>(AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET_SPEED));
-    } else if (codec_ == parties::VideoCodecId::H265) {
+    } else if (codec_ == VideoCodecId::H265) {
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_USAGE,
             static_cast<amf_int64>(AMF_VIDEO_ENCODER_HEVC_USAGE_LOW_LATENCY));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD,
@@ -103,7 +109,7 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_FRAMERATE, AMFConstructRate(fps, 1));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE,
-            static_cast<amf_int64>(fps * (parties::VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
+            static_cast<amf_int64>(fps * (VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET,
             static_cast<amf_int64>(AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_SPEED));
     } else {
@@ -114,13 +120,12 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_IDR_PERIOD,
-            static_cast<amf_int64>(fps * (parties::VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
+            static_cast<amf_int64>(fps * (VIDEO_KEYFRAME_INTERVAL_MS / 1000)));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_B_PIC_PATTERN, static_cast<amf_int64>(0));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_QUALITY_PRESET,
             static_cast<amf_int64>(AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED));
     }
 
-    // Initialize encoder — BGRA input, encoder handles color conversion internally
     res = encoder_->Init(amf::AMF_SURFACE_BGRA, width, height);
     if (res != AMF_OK) {
         std::fprintf(stderr, "[AMF] Encoder Init(BGRA) failed: %d\n", res);
@@ -131,7 +136,6 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         return false;
     }
 
-    // Create staging texture for copy-based encode path
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
     desc.Height = height;
@@ -140,7 +144,6 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc = {1, 0};
     desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = 0;
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_texture_);
@@ -158,7 +161,7 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     return true;
 }
 
-bool AmfEncoder::try_codec(const wchar_t* component_id, parties::VideoCodecId id) {
+bool AmfEncoder::try_codec(const wchar_t* component_id, VideoCodecId id) {
     amf::AMFComponent* enc = nullptr;
     AMF_RESULT res = factory_->CreateComponent(context_, component_id, &enc);
     if (res != AMF_OK || !enc) return false;
@@ -168,35 +171,10 @@ bool AmfEncoder::try_codec(const wchar_t* component_id, parties::VideoCodecId id
     return true;
 }
 
-void AmfEncoder::shutdown() {
-    if (!initialized_) return;
-
-    if (encoder_) {
-        encoder_->Drain();
-        encoder_->Terminate();
-        encoder_->Release();
-        encoder_ = nullptr;
-    }
-
-    staging_texture_.Reset();
-    d3d_context_.Reset();
-    device_.Reset();
-    num_external_inputs_ = 0;
-
-    if (context_) {
-        context_->Terminate();
-        context_->Release();
-        context_ = nullptr;
-    }
-
-    initialized_ = false;
-}
-
-bool AmfEncoder::encode_frame(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) {
-    ZoneScopedN("AmfEncoder::encode_frame");
+bool AmfEncoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) {
+    ZoneScopedN("AmfEncoder::encode");
     if (!initialized_) return false;
 
-    // Copy to staging (same pattern as NVENC copy path)
     d3d_context_->CopyResource(staging_texture_.Get(), bgra_texture);
     d3d_context_->Flush();
 
@@ -223,7 +201,6 @@ bool AmfEncoder::encode_registered(int slot, int64_t timestamp_100ns) {
 }
 
 bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
-    // Wrap D3D11 texture as AMF surface (zero-copy)
     amf::AMFSurface* surface = nullptr;
     AMF_RESULT res = context_->CreateSurfaceFromDX11Native(texture, &surface, nullptr);
     if (res != AMF_OK || !surface) {
@@ -233,13 +210,12 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
 
     surface->SetPts(timestamp_100ns);
 
-    // Force keyframe if requested
     if (force_keyframe_) {
         force_keyframe_ = false;
-        if (codec_ == parties::VideoCodecId::AV1) {
+        if (codec_ == VideoCodecId::AV1) {
             surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE,
                 static_cast<amf_int64>(AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE_KEY));
-        } else if (codec_ == parties::VideoCodecId::H265) {
+        } else if (codec_ == VideoCodecId::H265) {
             surface->SetProperty(AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE,
                 static_cast<amf_int64>(AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_IDR));
         } else {
@@ -252,13 +228,11 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
     surface->Release();
 
     if (res != AMF_OK) {
-        // AMF_INPUT_FULL means encoder is busy — drop frame
         if (res == AMF_INPUT_FULL) return true;
         std::fprintf(stderr, "[AMF] SubmitInput failed: %d\n", res);
         return false;
     }
 
-    // Poll for output (synchronous — low-latency mode produces 1:1)
     amf::AMFData* data = nullptr;
     for (int retry = 0; retry < 100; retry++) {
         res = encoder_->QueryOutput(&data);
@@ -270,7 +244,7 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
         break;
     }
 
-    if (!data) return true;  // No output yet (encoder is pipelining)
+    if (!data) return true;
 
     amf::AMFBuffer* buffer = nullptr;
     data->QueryInterface(amf::AMFBuffer::IID(), reinterpret_cast<void**>(&buffer));
@@ -279,14 +253,13 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
         return false;
     }
 
-    // Determine if this is a keyframe
     bool keyframe = false;
     amf_int64 frame_type = 0;
-    if (codec_ == parties::VideoCodecId::AV1) {
+    if (codec_ == VideoCodecId::AV1) {
         if (data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE, &frame_type) == AMF_OK)
             keyframe = (frame_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_KEY ||
                         frame_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_INTRA_ONLY);
-    } else if (codec_ == parties::VideoCodecId::H265) {
+    } else if (codec_ == VideoCodecId::H265) {
         if (data->GetProperty(AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE, &frame_type) == AMF_OK)
             keyframe = (frame_type == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR ||
                         frame_type == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I);
@@ -313,12 +286,16 @@ void AmfEncoder::force_keyframe() {
 void AmfEncoder::set_bitrate(uint32_t bitrate) {
     if (!initialized_ || !encoder_) return;
 
-    if (codec_ == parties::VideoCodecId::AV1)
+    if (codec_ == VideoCodecId::AV1)
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
-    else if (codec_ == parties::VideoCodecId::H265)
+    else if (codec_ == VideoCodecId::H265)
         encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
     else
         encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, static_cast<amf_int64>(bitrate));
 }
 
-} // namespace parties::client::amd
+EncoderInfo AmfEncoder::info() const {
+    return {Backend::AMF, codec_, width_, height_};
+}
+
+} // namespace parties::encdec::amd

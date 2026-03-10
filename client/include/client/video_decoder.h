@@ -1,35 +1,23 @@
 #pragma once
 
-#include <parties/video_common.h>
+#include <encdec/decoder.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 
-namespace parties::client::nvidia { class NvdecDecoder; }
-namespace parties::client::amd { class AmfDecoder; }
-
 namespace parties::client {
 
-struct DecodedFrame {
-    const uint8_t* y_plane;
-    const uint8_t* u_plane;   // I420: U plane; NV12: interleaved UV plane
-    const uint8_t* v_plane;   // I420: V plane; NV12: unused (nullptr)
-    uint32_t y_stride;
-    uint32_t uv_stride;
-    uint32_t width;
-    uint32_t height;
-    int64_t timestamp;
-    bool nv12 = false;        // true = NV12 (Y + interleaved UV), false = I420 (Y + U + V)
-};
+// Re-export DecodedFrame from encdec for client code compatibility
+using encdec::DecodedFrame;
 
 class VideoDecoder {
 public:
-    VideoDecoder();
+    VideoDecoder() = default;
     ~VideoDecoder();
 
-    // Initialize for the given codec. Width/height are hints for MFT;
-    // dav1d determines dimensions from the bitstream.
+    // Initialize for the given codec.
+    // Tries hardware decoders first (NVDEC, AMF), then software (dav1d, MFT).
     bool init(VideoCodecId codec, uint32_t width, uint32_t height);
     void shutdown();
 
@@ -42,20 +30,19 @@ public:
     VideoCodecId codec() const { return codec_; }
 
     // True if the hardware decoder's GPU context was invalidated
-    // (e.g., game launch causing device reset). Caller should reinitialize.
     bool context_lost() const;
 
     // After a context_lost, call this before reinit to force software-only decoding.
     void disable_hardware() { hardware_disabled_ = true; }
 
-    // Callback with decoded I420 frame
+    // Which backend is active?
+    const char* backend_name() const;
+
+    // Callback with decoded frame
     std::function<void(const DecodedFrame& frame)> on_decoded;
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-    std::unique_ptr<nvidia::NvdecDecoder> nvdec_;
-    std::unique_ptr<amd::AmfDecoder> amf_;
+    std::unique_ptr<encdec::Decoder> decoder_;
     VideoCodecId codec_ = VideoCodecId::AV1;
     bool initialized_ = false;
     bool hardware_disabled_ = false;

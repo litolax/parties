@@ -7,7 +7,7 @@
 #include "nvcuvid.h"      // Official NVIDIA CUVID parser types
 #include "nvEncodeAPI.h"  // Official NVIDIA NVENC types
 
-namespace parties::client::nvidia {
+namespace parties::encdec::nvidia {
 
 // CUDA driver API function pointers (loaded from nvcuda.dll)
 struct CudaApi {
@@ -44,4 +44,4 @@ bool load_nvenc(NV_ENCODE_API_FUNCTION_LIST& funcs);
 bool load_cuda(CudaApi& api);
 bool load_cuvid(CuvidApi& api);
 
-} // namespace parties::client::nvidia
+} // namespace parties::encdec::nvidia
