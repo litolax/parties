@@ -237,6 +237,27 @@
                 </div>
             </div>
 
+            <!-- Global Hotkeys -->
+            <div class="settings-section">
+                <div class="settings-label">Hotkeys</div>
+                <div class="keybind-row">
+                    <span class="slider-label">Toggle Mute</span>
+                    <div class="keybind-btn" data-event-click="mute_bind">
+                        <span data-if="mute_binding">Press a key...</span>
+                        <span data-if="mute_binding == false && mute_key > 0">{{ mute_key_name }}</span>
+                        <span data-if="mute_binding == false && mute_key == 0">Not set</span>
+                    </div>
+                </div>
+                <div class="keybind-row">
+                    <span class="slider-label">Toggle Deafen</span>
+                    <div class="keybind-btn" data-event-click="deafen_bind">
+                        <span data-if="deafen_binding">Press a key...</span>
+                        <span data-if="deafen_binding == false && deafen_key > 0">{{ deafen_key_name }}</span>
+                        <span data-if="deafen_binding == false && deafen_key == 0">Not set</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Identity backup/import -->
             <div class="settings-section">
                 <div class="settings-label">Identity</div>

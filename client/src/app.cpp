@@ -173,6 +173,24 @@ void App::setup_model_callbacks() {
         save_pref_debounced("audio.ptt_delay", std::to_string(static_cast<int>(delay)));
     };
 
+    model_.on_mute_bind = [this]() {
+        model_.mute_binding = true;
+        model_.deafen_binding = false;
+        model_.ptt_binding = false;
+        model_.dirty("mute_binding");
+        model_.dirty("deafen_binding");
+        model_.dirty("ptt_binding");
+    };
+
+    model_.on_deafen_bind = [this]() {
+        model_.deafen_binding = true;
+        model_.mute_binding = false;
+        model_.ptt_binding = false;
+        model_.dirty("deafen_binding");
+        model_.dirty("mute_binding");
+        model_.dirty("ptt_binding");
+    };
+
     model_.on_toggle_share = [this]() {
         if (sharing_screen_)
             stop_screen_share();
@@ -870,6 +888,18 @@ bool App::init(HWND hwnd) {
         if (!val.empty())
             model_.ptt_delay = static_cast<float>(std::stoi(val));
 
+        // Global hotkeys
+        val = pref("audio.mute_key");
+        if (!val.empty()) {
+            model_.mute_key = std::stoi(val);
+            model_.mute_key_name = Rml::String(vk_to_name(model_.mute_key).c_str());
+        }
+        val = pref("audio.deafen_key");
+        if (!val.empty()) {
+            model_.deafen_key = std::stoi(val);
+            model_.deafen_key_name = Rml::String(vk_to_name(model_.deafen_key).c_str());
+        }
+
         // Find saved device by name
         val = pref("audio.capture_device");
         if (!val.empty()) {
@@ -1082,6 +1112,103 @@ void App::shutdown() {
     settings_.close();
 }
 
+// Helper: scan for key press during keybind capture
+static bool capture_keybind(int& out_key, Rml::String& out_name, bool& binding,
+                            const std::string& pref_key,
+                            parties::client::Settings& settings) {
+    for (int vk = 1; vk < 256; vk++) {
+        if (vk == VK_ESCAPE) {
+            if (GetAsyncKeyState(vk) & 0x8000) {
+                binding = false;
+                return true;
+            }
+            continue;
+        }
+        if (GetAsyncKeyState(vk) & 0x8000) {
+            out_key = vk;
+            out_name = Rml::String(vk_to_name(vk).c_str());
+            binding = false;
+            settings.set_pref(pref_key, std::to_string(vk));
+            return true;
+        }
+    }
+    return false;
+}
+
+void App::poll_hotkeys() {
+    // Keybind capture (scan for any key press)
+    if (model_.ptt_binding) {
+        if (capture_keybind(model_.ptt_key, model_.ptt_key_name, model_.ptt_binding,
+                            "audio.ptt_key", settings_)) {
+            model_.dirty("ptt_key");
+            model_.dirty("ptt_key_name");
+            model_.dirty("ptt_binding");
+        }
+    }
+    if (model_.mute_binding) {
+        if (capture_keybind(model_.mute_key, model_.mute_key_name, model_.mute_binding,
+                            "audio.mute_key", settings_)) {
+            model_.dirty("mute_key");
+            model_.dirty("mute_key_name");
+            model_.dirty("mute_binding");
+        }
+    }
+    if (model_.deafen_binding) {
+        if (capture_keybind(model_.deafen_key, model_.deafen_key_name, model_.deafen_binding,
+                            "audio.deafen_key", settings_)) {
+            model_.dirty("deafen_key");
+            model_.dirty("deafen_key_name");
+            model_.dirty("deafen_binding");
+        }
+    }
+
+    // PTT polling — hold key to unmute, release to mute (with optional delay)
+    if (model_.ptt_enabled && model_.ptt_key != 0 && current_channel_ != 0) {
+        bool held = (GetAsyncKeyState(model_.ptt_key) & 0x8000) != 0;
+        auto now = std::chrono::steady_clock::now();
+
+        if (held) {
+            ptt_held_ = true;
+            if (audio_.is_muted()) {
+                audio_.set_muted(false);
+                model_.is_muted = false;
+                model_.dirty("is_muted");
+            }
+        } else if (ptt_held_) {
+            ptt_held_ = false;
+            ptt_release_time_ = now;
+        }
+
+        if (!ptt_held_ && !audio_.is_muted()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - ptt_release_time_).count();
+            if (elapsed >= static_cast<int64_t>(model_.ptt_delay)) {
+                audio_.set_muted(true);
+                model_.is_muted = true;
+                model_.dirty("is_muted");
+            }
+        }
+    }
+
+    // Mute toggle hotkey (edge-triggered: fire on press, not hold)
+    if (model_.mute_key != 0 && !model_.ptt_enabled && current_channel_ != 0) {
+        bool held = (GetAsyncKeyState(model_.mute_key) & 0x8000) != 0;
+        if (held && !mute_key_held_) {
+            if (model_.on_toggle_mute) model_.on_toggle_mute();
+        }
+        mute_key_held_ = held;
+    }
+
+    // Deafen toggle hotkey (edge-triggered)
+    if (model_.deafen_key != 0 && current_channel_ != 0) {
+        bool held = (GetAsyncKeyState(model_.deafen_key) & 0x8000) != 0;
+        if (held && !deafen_key_held_) {
+            if (model_.on_toggle_deafen) model_.on_toggle_deafen();
+        }
+        deafen_key_held_ = held;
+    }
+}
+
 void App::update() {
 	ZoneScopedN("App::update");
     // Check if captured window was closed
@@ -1098,29 +1225,7 @@ void App::update() {
     if (net_.is_connected())
         process_server_messages();
 
-    // PTT keybind capture (scan for any key press)
-    if (model_.ptt_binding) {
-        for (int vk = 1; vk < 256; vk++) {
-            if (vk == VK_ESCAPE) {
-                if (GetAsyncKeyState(vk) & 0x8000) {
-                    model_.ptt_binding = false;
-                    model_.dirty("ptt_binding");
-                    break;
-                }
-                continue;
-            }
-            if (GetAsyncKeyState(vk) & 0x8000) {
-                model_.ptt_key = vk;
-                model_.ptt_key_name = Rml::String(vk_to_name(vk).c_str());
-                model_.ptt_binding = false;
-                model_.dirty("ptt_key");
-                model_.dirty("ptt_key_name");
-                model_.dirty("ptt_binding");
-                settings_.set_pref("audio.ptt_key", std::to_string(vk));
-                break;
-            }
-        }
-    }
+    poll_hotkeys();
 
     // ESC exits fullscreen stream view
     if (model_.stream_fullscreen && (GetAsyncKeyState(VK_ESCAPE) & 1)) {
@@ -1131,36 +1236,6 @@ void App::update() {
     // Sync OS window fullscreen state with model
     if (ui_.is_fullscreen() != model_.stream_fullscreen)
         ui_.set_fullscreen(model_.stream_fullscreen);
-
-    // PTT polling — hold key to unmute, release to mute (with optional delay)
-    if (model_.ptt_enabled && model_.ptt_key != 0 && current_channel_ != 0) {
-        bool held = (GetAsyncKeyState(model_.ptt_key) & 0x8000) != 0;
-        auto now = std::chrono::steady_clock::now();
-
-        if (held) {
-            ptt_held_ = true;
-            if (audio_.is_muted()) {
-                audio_.set_muted(false);
-                model_.is_muted = false;
-                model_.dirty("is_muted");
-            }
-        } else if (ptt_held_) {
-            // Key just released — start delay timer
-            ptt_held_ = false;
-            ptt_release_time_ = now;
-        }
-
-        // Apply mute after delay expires
-        if (!ptt_held_ && !audio_.is_muted()) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - ptt_release_time_).count();
-            if (elapsed >= static_cast<int64_t>(model_.ptt_delay)) {
-                audio_.set_muted(true);
-                model_.is_muted = true;
-                model_.dirty("is_muted");
-            }
-        }
-    }
 
     // QUIC datagrams are received via callbacks — no polling needed
 

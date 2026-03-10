@@ -351,6 +351,9 @@ int main(int /*argc*/, char* /*argv*/[]) {
         }
         if (!running) break;
 
+        // Global hotkeys (PTT, mute, deafen) must run even when minimized
+        app.poll_hotkeys();
+
         // When minimized, no rendering occurs and the vsync wait is skipped,
         // so throttle the loop to avoid spinning the CPU.
         if (app.ui_manager()->is_minimized()) {

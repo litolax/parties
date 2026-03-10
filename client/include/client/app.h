@@ -46,6 +46,10 @@ public:
     // Main loop tick (called each frame)
     void update();
 
+    // Lightweight tick for global hotkeys (PTT, mute, deafen).
+    // Called even when minimized.
+    void poll_hotkeys();
+
     // Public accessor for WndProc
     UiManager* ui_manager() { return &ui_; }
 
@@ -135,6 +139,10 @@ private:
     // PTT release delay
     std::chrono::steady_clock::time_point ptt_release_time_{};
     bool ptt_held_ = false;
+
+    // Hotkey edge detection (trigger on press, not hold)
+    bool mute_key_held_ = false;
+    bool deafen_key_held_ = false;
 
     // Screen sharing state
     std::vector<CaptureTarget> capture_targets_;

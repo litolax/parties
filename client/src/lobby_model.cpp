@@ -84,6 +84,12 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.Bind("ptt_key_name",     &ptt_key_name);
     ctor.Bind("ptt_binding",      &ptt_binding);
     ctor.Bind("ptt_delay",        &ptt_delay);
+    ctor.Bind("mute_key",         &mute_key);
+    ctor.Bind("mute_key_name",    &mute_key_name);
+    ctor.Bind("mute_binding",     &mute_binding);
+    ctor.Bind("deafen_key",       &deafen_key);
+    ctor.Bind("deafen_key_name",  &deafen_key_name);
+    ctor.Bind("deafen_binding",   &deafen_binding);
 
     // Screen sharing
     ctor.Bind("is_sharing",          &is_sharing);
@@ -221,6 +227,16 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.BindEventCallback("ptt_bind",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
             if (on_ptt_bind) on_ptt_bind();
+        });
+
+    ctor.BindEventCallback("mute_bind",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_mute_bind) on_mute_bind();
+        });
+
+    ctor.BindEventCallback("deafen_bind",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_deafen_bind) on_deafen_bind();
         });
 
     ctor.BindEventCallback("ptt_delay_changed",
@@ -446,6 +462,12 @@ void LobbyModel::dirty_all() {
     dirty("ptt_key_name");
     dirty("ptt_binding");
     dirty("ptt_delay");
+    dirty("mute_key");
+    dirty("mute_key_name");
+    dirty("mute_binding");
+    dirty("deafen_key");
+    dirty("deafen_key_name");
+    dirty("deafen_binding");
     dirty("is_sharing");
     dirty("someone_sharing");
     dirty("sharers");

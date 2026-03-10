@@ -88,6 +88,14 @@ public:
     bool ptt_binding = false;        // true when waiting for key press
     float ptt_delay = 0.0f;         // release delay in ms (0-1000, step 50)
 
+    // Global hotkeys
+    int mute_key = 0;               // Toggle mute hotkey (0 = not set)
+    Rml::String mute_key_name;
+    bool mute_binding = false;
+    int deafen_key = 0;             // Toggle deafen hotkey (0 = not set)
+    Rml::String deafen_key_name;
+    bool deafen_binding = false;
+
     // Screen sharing
     bool is_sharing = false;
     bool someone_sharing = false;           // convenience: !sharers.empty()
@@ -152,6 +160,8 @@ public:
     std::function<void()>      on_toggle_ptt;
     std::function<void()>      on_ptt_bind;
     std::function<void(float)> on_ptt_delay_changed;
+    std::function<void()>      on_mute_bind;
+    std::function<void()>      on_deafen_bind;
     std::function<void()>      on_toggle_share;
     std::function<void(int)>   on_select_share_target;
     std::function<void()>      on_cancel_share;
