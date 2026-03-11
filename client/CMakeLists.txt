@@ -24,7 +24,9 @@ add_executable(parties_client
     src/miniaudio_impl.cpp
     src/rmlui_backend.cpp
     src/ui_manager.cpp
+    src/dx11/RmlUi_Renderer_DX11.cpp
     src/dx12/RmlUi_Renderer_DX12.cpp
+    src/dx12/RmlUi_Renderer_DX12WL.cpp
     src/dx12/RmlUi_Platform_Win32.cpp
     src/dx12/offsetAllocator.cpp
     src/screen_capture.cpp
@@ -57,6 +59,7 @@ set_source_files_properties(src/sound_player.cpp PROPERTIES
 target_include_directories(parties_client
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dx12
         ${MINIAUDIO_INCLUDE_DIRS}
         ${SPEEXDSP_INCLUDE_DIRS}
@@ -80,7 +83,7 @@ target_link_libraries(parties_client
         RmlUi::Debugger
         GPUOpen::D3D12MemoryAllocator
         ${SPEEXDSP_LIBRARY}
-        d3d12 dxgi d3dcompiler
+        d3d11 d3d12 dxgi d3dcompiler
         windowsapp
         dwmapi
 )

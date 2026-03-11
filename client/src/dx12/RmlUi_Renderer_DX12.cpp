@@ -458,8 +458,9 @@ struct RenderInterface_DX12::FrameUploadHeap {
 };
 
 struct LayerData {
-	Microsoft::WRL::ComPtr<ID3D12Resource> color_texture; // R8G8B8A8_UNORM render target
-	int32_t srv_index = -1;     // slot in SRV heap for reading as texture
+	Microsoft::WRL::ComPtr<ID3D12Resource> color_texture;   // Render target (MSAA when enabled)
+	Microsoft::WRL::ComPtr<ID3D12Resource> resolve_texture;  // Non-MSAA resolve target (null if no MSAA)
+	int32_t srv_index = -1;     // SRV for reading as texture (points to resolve or color)
 	int width = 0;
 	int height = 0;
 };
@@ -557,20 +558,43 @@ RenderInterface_DX12::RenderInterface_DX12(void* p_window_handle, const Backend:
 	if (!CreateDevice()) return;
 	if (!CreateCommandQueue()) return;
 	if (!CreateSwapChain(w, h)) return;
+
+	// Query MSAA support (after device creation)
+	msaa_samples_ = settings.msaa_sample_count > 1 ? settings.msaa_sample_count : 1;
+	if (msaa_samples_ > 1) {
+		D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msaa_query{};
+		msaa_query.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		msaa_query.SampleCount = msaa_samples_;
+		msaa_query.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+		HRESULT hr = device_->CheckFeatureSupport(
+			D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &msaa_query, sizeof(msaa_query));
+		if (FAILED(hr) || msaa_query.NumQualityLevels == 0) {
+			std::printf("[DX12] MSAA %ux not supported, falling back to 1x\n", msaa_samples_);
+			msaa_samples_ = 1;
+			msaa_quality_ = 0;
+		} else {
+			msaa_quality_ = 0; // Quality 0 is universally supported; higher levels are driver-specific
+			std::printf("[DX12] MSAA %ux enabled (quality levels: %u)\n",
+				msaa_samples_, msaa_query.NumQualityLevels);
+		}
+	}
+
 	if (!CreateRtvHeap()) return;
 	if (!CreateDsvHeap()) return;
 	if (!CreateSrvHeap()) return;
 	if (!CreateCommandAllocatorsAndList()) return;
 	if (!CreateFences()) return;
 
+	// Store dimensions before creating dependent resources (depth/stencil, MSAA RT need them)
+	width_ = w;
+	height_ = h;
+
 	CreateRenderTargetViews();
 	if (!CreateDepthStencilBuffer()) return;
+	if (!CreateMSAARenderTarget()) return;
 
 	if (!CreatePipelineState()) return;
 	if (!CreateFullscreenQuad()) return;
-
-	width_ = w;
-	height_ = h;
 
 	if (!CreateFrameUploadHeaps()) return;
 	if (!CreatePostprocessTargets()) return;
@@ -579,7 +603,7 @@ RenderInterface_DX12::RenderInterface_DX12(void* p_window_handle, const Backend:
 	current_back_buffer_index_ = static_cast<IDXGISwapChain4*>(swap_chain_.Get())->GetCurrentBackBufferIndex();
 
 	valid_ = true;
-	std::printf("[DX12] Renderer initialized (%dx%d)\n", width_, height_);
+	std::printf("[DX12] Renderer initialized (%dx%d, MSAA %ux)\n", width_, height_, msaa_samples_);
 }
 
 RenderInterface_DX12::~RenderInterface_DX12() {
@@ -588,6 +612,9 @@ RenderInterface_DX12::~RenderInterface_DX12() {
 
 		// Release postprocess targets
 		ReleasePostprocessTargets();
+
+		// Release MSAA render target
+		msaa_color_texture_.Reset();
 
 		// Release all layers
 		ReleaseAllLayers();
@@ -842,8 +869,8 @@ bool RenderInterface_DX12::CreateDepthStencilBuffer() {
 	ds_desc.DepthOrArraySize = 1;
 	ds_desc.MipLevels = 1;
 	ds_desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-	ds_desc.SampleDesc.Count = 1;
-	ds_desc.SampleDesc.Quality = 0;
+	ds_desc.SampleDesc.Count = msaa_samples_;
+	ds_desc.SampleDesc.Quality = msaa_quality_;
 	ds_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	ds_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -862,12 +889,63 @@ bool RenderInterface_DX12::CreateDepthStencilBuffer() {
 	// Create DSV
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc{};
 	dsv_desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-	dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	dsv_desc.ViewDimension = msaa_samples_ > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMS : D3D12_DSV_DIMENSION_TEXTURE2D;
 	dsv_desc.Texture2D.MipSlice = 0;
 	dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
 
 	device_->CreateDepthStencilView(depth_stencil_buffer_.Get(), &dsv_desc,
 		dsv_heap_->GetCPUDescriptorHandleForHeapStart());
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// MSAA intermediate render target
+// ---------------------------------------------------------------------------
+
+bool RenderInterface_DX12::CreateMSAARenderTarget() {
+	msaa_color_texture_.Reset();
+
+	if (msaa_samples_ <= 1)
+		return true; // No MSAA — nothing to create
+
+	int w = width_ > 0 ? width_ : 1;
+	int h = height_ > 0 ? height_ : 1;
+
+	D3D12_HEAP_PROPERTIES default_heap{};
+	default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+	D3D12_RESOURCE_DESC tex_desc{};
+	tex_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	tex_desc.Width = static_cast<UINT64>(w);
+	tex_desc.Height = static_cast<UINT>(h);
+	tex_desc.DepthOrArraySize = 1;
+	tex_desc.MipLevels = 1;
+	tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	tex_desc.SampleDesc.Count = msaa_samples_;
+	tex_desc.SampleDesc.Quality = msaa_quality_;
+	tex_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	tex_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+	D3D12_CLEAR_VALUE clear_value{};
+	clear_value.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	// Dark background: #0d0e17
+	clear_value.Color[0] = 0.051f;
+	clear_value.Color[1] = 0.055f;
+	clear_value.Color[2] = 0.090f;
+	clear_value.Color[3] = 1.0f;
+
+	DX_CHECK(device_->CreateCommittedResource(
+		&default_heap, D3D12_HEAP_FLAG_NONE, &tex_desc,
+		D3D12_RESOURCE_STATE_RENDER_TARGET, &clear_value,
+		IID_PPV_ARGS(&msaa_color_texture_)),
+		"CreateCommittedResource(MSAA_RT)");
+	msaa_color_texture_->SetName(L"RmlUi_MSAA_ColorTexture");
+
+	// Create RTV at slot NUM_BACK_BUFFERS (slot 2)
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
+	rtv_handle.ptr += static_cast<SIZE_T>(NUM_BACK_BUFFERS) * rtv_descriptor_size_;
+	device_->CreateRenderTargetView(msaa_color_texture_.Get(), nullptr, rtv_handle);
 
 	return true;
 }
@@ -1151,7 +1229,7 @@ bool RenderInterface_DX12::CreatePipelineState() {
 	pso_desc.RasterizerState.DepthBiasClamp = 0.0f;
 	pso_desc.RasterizerState.SlopeScaledDepthBias = 0.0f;
 	pso_desc.RasterizerState.DepthClipEnable = TRUE;
-	pso_desc.RasterizerState.MultisampleEnable = FALSE;
+	pso_desc.RasterizerState.MultisampleEnable = msaa_samples_ > 1 ? TRUE : FALSE;
 	pso_desc.RasterizerState.AntialiasedLineEnable = FALSE;
 	pso_desc.RasterizerState.ForcedSampleCount = 0;
 	pso_desc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
@@ -1177,8 +1255,8 @@ bool RenderInterface_DX12::CreatePipelineState() {
 	pso_desc.NumRenderTargets = 1;
 	pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
 	pso_desc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
-	pso_desc.SampleDesc.Count = 1;
-	pso_desc.SampleDesc.Quality = 0;
+	pso_desc.SampleDesc.Count = msaa_samples_;
+	pso_desc.SampleDesc.Quality = msaa_quality_;
 	pso_desc.SampleMask = UINT_MAX;
 
 	// ---------------------------------------------------------------
@@ -1270,6 +1348,11 @@ bool RenderInterface_DX12::CreatePipelineState() {
 	pso_desc.DepthStencilState.StencilEnable = FALSE;
 	pso_desc.DepthStencilState.DepthEnable = FALSE;
 	pso_desc.DSVFormat = DXGI_FORMAT_UNKNOWN; // No DSV bound during compositing
+	pso_desc.RasterizerState.MultisampleEnable = FALSE;
+
+	// Non-MSAA passthrough PSOs (SampleDesc.Count=1) — used for compositing to postprocess targets
+	pso_desc.SampleDesc.Count = 1;
+	pso_desc.SampleDesc.Quality = 0;
 
 	// 7. Passthrough Blend — premultiplied alpha blending
 	rt_blend.BlendEnable = TRUE;
@@ -1290,6 +1373,38 @@ bool RenderInterface_DX12::CreatePipelineState() {
 	DX_CHECK(device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pso_passthrough_replace_)),
 		"CreateGraphicsPipelineState(PassthroughReplace)");
 	pso_passthrough_replace_->SetName(L"RmlUi_PSO_PassthroughReplace");
+
+	// MSAA passthrough PSOs — used for compositing to MSAA render targets (back buffer, layers)
+	if (msaa_samples_ > 1) {
+		pso_desc.SampleDesc.Count = msaa_samples_;
+		pso_desc.SampleDesc.Quality = msaa_quality_;
+		pso_desc.RasterizerState.MultisampleEnable = TRUE;
+
+		// Blend MSAA
+		rt_blend.BlendEnable = TRUE;
+		rt_blend.SrcBlend = D3D12_BLEND_ONE;
+		rt_blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+		rt_blend.BlendOp = D3D12_BLEND_OP_ADD;
+		rt_blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+		rt_blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+		rt_blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+		rt_blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+		DX_CHECK(device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pso_passthrough_blend_msaa_)),
+			"CreateGraphicsPipelineState(PassthroughBlendMSAA)");
+		pso_passthrough_blend_msaa_->SetName(L"RmlUi_PSO_PassthroughBlend_MSAA");
+
+		// Replace MSAA
+		rt_blend.BlendEnable = FALSE;
+		rt_blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+		DX_CHECK(device_->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pso_passthrough_replace_msaa_)),
+			"CreateGraphicsPipelineState(PassthroughReplaceMSAA)");
+		pso_passthrough_replace_msaa_->SetName(L"RmlUi_PSO_PassthroughReplace_MSAA");
+
+		// Reset back to non-MSAA for subsequent filter PSOs
+		pso_desc.SampleDesc.Count = 1;
+		pso_desc.SampleDesc.Quality = 0;
+		pso_desc.RasterizerState.MultisampleEnable = FALSE;
+	}
 
 	// ---------------------------------------------------------------
 	// Phase 6 PSOs: filters and shaders
@@ -1343,10 +1458,13 @@ bool RenderInterface_DX12::CreatePipelineState() {
 		"main", "ps_5_0", "RmlUi_PS_Gradient");
 	if (!ps_gradient_blob) return false;
 
-	// Switch back to main VS and full PSO settings for gradient
+	// Switch back to main VS and full PSO settings for gradient (renders to MSAA targets)
 	pso_desc.VS = { vs_blob->GetBufferPointer(), vs_blob->GetBufferSize() };
 	pso_desc.PS = { ps_gradient_blob->GetBufferPointer(), ps_gradient_blob->GetBufferSize() };
 	pso_desc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	pso_desc.SampleDesc.Count = msaa_samples_;
+	pso_desc.SampleDesc.Quality = msaa_quality_;
+	pso_desc.RasterizerState.MultisampleEnable = msaa_samples_ > 1 ? TRUE : FALSE;
 	pso_desc.DepthStencilState.StencilEnable = FALSE;
 	pso_desc.DepthStencilState.DepthEnable = FALSE;
 	rt_blend.BlendEnable = TRUE;
@@ -1435,6 +1553,7 @@ bool RenderInterface_DX12::CreatePipelineState() {
 		yuv_pso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
 		yuv_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 		yuv_pso.RasterizerState.DepthClipEnable = TRUE;
+		yuv_pso.RasterizerState.MultisampleEnable = msaa_samples_ > 1 ? TRUE : FALSE;
 		yuv_pso.DepthStencilState.DepthEnable = FALSE;
 		yuv_pso.DepthStencilState.StencilEnable = FALSE;
 		yuv_pso.DepthStencilState.StencilReadMask = 0xFF;
@@ -1444,7 +1563,8 @@ bool RenderInterface_DX12::CreatePipelineState() {
 		yuv_pso.NumRenderTargets = 1;
 		yuv_pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
 		yuv_pso.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
-		yuv_pso.SampleDesc.Count = 1;
+		yuv_pso.SampleDesc.Count = msaa_samples_;
+		yuv_pso.SampleDesc.Quality = msaa_quality_;
 		yuv_pso.SampleMask = UINT_MAX;
 
 		DX_CHECK(device_->CreateGraphicsPipelineState(&yuv_pso, IID_PPV_ARGS(&pso_yuv_)),
@@ -1522,6 +1642,7 @@ bool RenderInterface_DX12::CreatePipelineState() {
 		nv12_pso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
 		nv12_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 		nv12_pso.RasterizerState.DepthClipEnable = TRUE;
+		nv12_pso.RasterizerState.MultisampleEnable = msaa_samples_ > 1 ? TRUE : FALSE;
 		nv12_pso.DepthStencilState.DepthEnable = FALSE;
 		nv12_pso.DepthStencilState.StencilEnable = FALSE;
 		nv12_pso.DepthStencilState.StencilReadMask = 0xFF;
@@ -1531,7 +1652,8 @@ bool RenderInterface_DX12::CreatePipelineState() {
 		nv12_pso.NumRenderTargets = 1;
 		nv12_pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
 		nv12_pso.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
-		nv12_pso.SampleDesc.Count = 1;
+		nv12_pso.SampleDesc.Count = msaa_samples_;
+		nv12_pso.SampleDesc.Quality = msaa_quality_;
 		nv12_pso.SampleMask = UINT_MAX;
 
 		DX_CHECK(device_->CreateGraphicsPipelineState(&nv12_pso, IID_PPV_ARGS(&pso_nv12_)),
@@ -1708,8 +1830,8 @@ bool RenderInterface_DX12::CreatePostprocessTargets() {
 		pp->width = width_;
 		pp->height = height_;
 
-		// RTV slot: after back buffers and layers
-		pp->rtv_slot = NUM_BACK_BUFFERS + MAX_LAYER_COUNT + i;
+		// RTV slot: after back buffers + MSAA slot + layers
+		pp->rtv_slot = NUM_BACK_BUFFERS + 1 + MAX_LAYER_COUNT + i;
 
 		// Allocate SRV
 		pp->srv_index = AllocateSrvSlot();
@@ -1794,11 +1916,12 @@ void RenderInterface_DX12::ReleasePostprocessTargets() {
 // Layer management
 // ---------------------------------------------------------------------------
 
-// Helper: compute RTV handle for a layer. Layer RTVs start after back buffer RTVs.
+// Helper: compute RTV handle for a layer. Layer RTVs start after back buffers + MSAA slot.
 static D3D12_CPU_DESCRIPTOR_HANDLE GetLayerRTV(ID3D12DescriptorHeap* rtv_heap,
 	uint32_t rtv_descriptor_size, int layer_index) {
 	D3D12_CPU_DESCRIPTOR_HANDLE handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
-	handle.ptr += static_cast<SIZE_T>(RenderInterface_DX12::NUM_BACK_BUFFERS + layer_index) * rtv_descriptor_size;
+	// +1 for MSAA back buffer RTV at slot NUM_BACK_BUFFERS
+	handle.ptr += static_cast<SIZE_T>(RenderInterface_DX12::NUM_BACK_BUFFERS + 1 + layer_index) * rtv_descriptor_size;
 	return handle;
 }
 
@@ -1815,6 +1938,7 @@ int RenderInterface_DX12::AllocateLayer() {
 			// Dimensions changed — release old resources and recreate
 			if (layer.srv_index >= 0) FreeSrvSlot(layer.srv_index);
 			layer.color_texture.Reset();
+			layer.resolve_texture.Reset();
 			layer.srv_index = -1;
 			layer.width = 0;
 			layer.height = 0;
@@ -1847,7 +1971,7 @@ int RenderInterface_DX12::AllocateLayer() {
 	if (srv_slot < 0) return -1;
 	layer.srv_index = srv_slot;
 
-	// Create color texture
+	// Create color texture (MSAA when enabled)
 	D3D12_HEAP_PROPERTIES default_heap{};
 	default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -1858,7 +1982,8 @@ int RenderInterface_DX12::AllocateLayer() {
 	tex_desc.DepthOrArraySize = 1;
 	tex_desc.MipLevels = 1;
 	tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	tex_desc.SampleDesc.Count = 1;
+	tex_desc.SampleDesc.Count = msaa_samples_;
+	tex_desc.SampleDesc.Quality = msaa_quality_;
 	tex_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	tex_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
@@ -1892,7 +2017,37 @@ int RenderInterface_DX12::AllocateLayer() {
 	device_->CreateRenderTargetView(layer.color_texture.Get(), nullptr,
 		GetLayerRTV(rtv_heap_.Get(), rtv_descriptor_size_, slot));
 
+	// When MSAA is active, create a separate non-MSAA resolve texture for sampling.
+	// The SRV points to the resolve texture (MSAA textures cannot be directly sampled
+	// by a Texture2D SRV — they require Texture2DMS which is a different shader path).
+	ID3D12Resource* srv_target = layer.color_texture.Get();
+	if (msaa_samples_ > 1) {
+		D3D12_RESOURCE_DESC resolve_desc = tex_desc;
+		resolve_desc.SampleDesc.Count = 1;
+		resolve_desc.SampleDesc.Quality = 0;
+
+		hr = device_->CreateCommittedResource(
+			&default_heap, D3D12_HEAP_FLAG_NONE, &resolve_desc,
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear_value,
+			IID_PPV_ARGS(&layer.resolve_texture));
+		if (FAILED(hr)) {
+			std::fprintf(stderr, "[DX12] Layer resolve texture creation failed: 0x%08lX\n",
+				static_cast<unsigned long>(hr));
+			FreeSrvSlot(srv_slot);
+			layer.srv_index = -1;
+			layer.color_texture.Reset();
+			return -1;
+		}
+
+		wchar_t resolve_name[64];
+		swprintf(resolve_name, 64, L"RmlUi_Layer_%d_Resolve", slot);
+		layer.resolve_texture->SetName(resolve_name);
+
+		srv_target = layer.resolve_texture.Get();
+	}
+
 	// Create SRV for reading as texture during compositing
+	// Points to resolve_texture (MSAA) or color_texture (non-MSAA)
 	D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc{};
 	srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -1902,7 +2057,7 @@ int RenderInterface_DX12::AllocateLayer() {
 
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = srv_heap_->GetCPUDescriptorHandleForHeapStart();
 	cpu_handle.ptr += static_cast<SIZE_T>(srv_slot) * srv_descriptor_size_;
-	device_->CreateShaderResourceView(layer.color_texture.Get(), &srv_desc, cpu_handle);
+	device_->CreateShaderResourceView(srv_target, &srv_desc, cpu_handle);
 
 	layer_in_use_[slot] = true;
 	return slot;
@@ -1919,6 +2074,7 @@ void RenderInterface_DX12::ReleaseAllLayers() {
 		auto& layer = layer_pool_[i];
 		if (layer.srv_index >= 0) FreeSrvSlot(layer.srv_index);
 		layer.color_texture.Reset();
+		layer.resolve_texture.Reset();
 		layer.srv_index = -1;
 		layer.width = 0;
 		layer.height = 0;
@@ -1936,9 +2092,52 @@ void RenderInterface_DX12::SetRenderTargetToLayer(int layer_index) {
 
 void RenderInterface_DX12::SetRenderTargetToBackBuffer() {
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
-	rtv.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	if (msaa_samples_ > 1) {
+		// Bind MSAA intermediate render target
+		rtv.ptr += static_cast<SIZE_T>(NUM_BACK_BUFFERS) * rtv_descriptor_size_;
+	} else {
+		rtv.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	}
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
 	command_list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+}
+
+void RenderInterface_DX12::ResolveLayer(int layer_index) {
+	if (msaa_samples_ <= 1) return;
+	if (layer_index < 0 || layer_index >= static_cast<int>(layer_pool_.size())) return;
+	auto& layer = layer_pool_[layer_index];
+	if (!layer.resolve_texture) return;
+
+	// MSAA color texture is in PSR state (set by PopLayer).
+	// Transition: PSR -> RESOLVE_SOURCE
+	// Resolve texture: PSR -> RESOLVE_DEST
+	D3D12_RESOURCE_BARRIER barriers[2] = {};
+	barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barriers[0].Transition.pResource = layer.color_texture.Get();
+	barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+
+	barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barriers[1].Transition.pResource = layer.resolve_texture.Get();
+	barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+
+	command_list_->ResourceBarrier(2, barriers);
+
+	command_list_->ResolveSubresource(
+		layer.resolve_texture.Get(), 0,
+		layer.color_texture.Get(), 0,
+		DXGI_FORMAT_R8G8B8A8_UNORM);
+
+	// Transition back: RESOLVE -> PSR
+	barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+	barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+	barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+	command_list_->ResourceBarrier(2, barriers);
 }
 
 // ---------------------------------------------------------------------------
@@ -2010,6 +2209,9 @@ void RenderInterface_DX12::SetViewport(int viewport_width, int viewport_height, 
 	// Release all layers — they'll be recreated at new dimensions when needed
 	ReleaseAllLayers();
 
+	// Release MSAA render target
+	msaa_color_texture_.Reset();
+
 	// Release back buffer references
 	ReleaseBackBufferResources();
 
@@ -2037,6 +2239,9 @@ void RenderInterface_DX12::SetViewport(int viewport_width, int viewport_height, 
 
 	// Recreate depth/stencil buffer at new dimensions
 	CreateDepthStencilBuffer();
+
+	// Recreate MSAA render target at new dimensions
+	CreateMSAARenderTarget();
 
 	// Update projection matrix for new dimensions
 	projection_ = Rml::Matrix4f::ProjectOrtho(0.0f, static_cast<float>(viewport_width),
@@ -2120,7 +2325,12 @@ void RenderInterface_DX12::BeginFrame() {
 
 	// Set render target with depth/stencil
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
-	rtv_handle.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	if (msaa_samples_ > 1) {
+		// Bind MSAA intermediate render target (slot NUM_BACK_BUFFERS)
+		rtv_handle.ptr += static_cast<SIZE_T>(NUM_BACK_BUFFERS) * rtv_descriptor_size_;
+	} else {
+		rtv_handle.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	}
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
 	command_list_->OMSetRenderTargets(1, &rtv_handle, FALSE, &dsv_handle);
 
@@ -2143,7 +2353,12 @@ void RenderInterface_DX12::Clear() {
 	const float clear_color[4] = { 0.051f, 0.055f, 0.090f, 1.0f };
 
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
-	rtv_handle.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	if (msaa_samples_ > 1) {
+		// Clear MSAA intermediate render target
+		rtv_handle.ptr += static_cast<SIZE_T>(NUM_BACK_BUFFERS) * rtv_descriptor_size_;
+	} else {
+		rtv_handle.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+	}
 	command_list_->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
 
 	// Clear stencil to 0
@@ -2161,15 +2376,58 @@ void RenderInterface_DX12::Clear() {
 
 void RenderInterface_DX12::EndFrame() {
 	ZoneScopedN("DX12::EndFrame");
-	// Transition back buffer: RENDER_TARGET -> PRESENT
-	D3D12_RESOURCE_BARRIER barrier{};
-	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	barrier.Transition.pResource = back_buffers_[current_back_buffer_index_].Get();
-	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-	command_list_->ResourceBarrier(1, &barrier);
+
+	if (msaa_samples_ > 1) {
+		// Resolve MSAA intermediate RT to back buffer, then present.
+		// MSAA texture: RENDER_TARGET -> RESOLVE_SOURCE
+		// Back buffer: RENDER_TARGET -> RESOLVE_DEST
+		D3D12_RESOURCE_BARRIER resolve_barriers[2] = {};
+		resolve_barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		resolve_barriers[0].Transition.pResource = msaa_color_texture_.Get();
+		resolve_barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		resolve_barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		resolve_barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+
+		resolve_barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		resolve_barriers[1].Transition.pResource = back_buffers_[current_back_buffer_index_].Get();
+		resolve_barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		resolve_barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		resolve_barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+
+		command_list_->ResourceBarrier(2, resolve_barriers);
+
+		command_list_->ResolveSubresource(
+			back_buffers_[current_back_buffer_index_].Get(), 0,
+			msaa_color_texture_.Get(), 0,
+			DXGI_FORMAT_R8G8B8A8_UNORM);
+
+		// Back buffer: RESOLVE_DEST -> PRESENT
+		// MSAA texture: RESOLVE_SOURCE -> RENDER_TARGET (ready for next frame)
+		D3D12_RESOURCE_BARRIER post_barriers[2] = {};
+		post_barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		post_barriers[0].Transition.pResource = back_buffers_[current_back_buffer_index_].Get();
+		post_barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		post_barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+		post_barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+
+		post_barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		post_barriers[1].Transition.pResource = msaa_color_texture_.Get();
+		post_barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		post_barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+		post_barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+		command_list_->ResourceBarrier(2, post_barriers);
+	} else {
+		// No MSAA — transition back buffer directly: RENDER_TARGET -> PRESENT
+		D3D12_RESOURCE_BARRIER barrier{};
+		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		barrier.Transition.pResource = back_buffers_[current_back_buffer_index_].Get();
+		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+		command_list_->ResourceBarrier(1, &barrier);
+	}
 
 	// Close and execute
 	HRESULT hr = command_list_->Close();
@@ -3345,6 +3603,9 @@ void RenderInterface_DX12::CompositeLayers(
 	auto& src_layer = layer_pool_[src_idx];
 
 	// Source should already be in PIXEL_SHADER_RESOURCE state (set by PopLayer).
+	// Resolve MSAA before sampling or filtering.
+	ResolveLayer(src_idx);
+
 	// Apply filters if any. After RenderFilters, the filtered result is in postprocess_targets_[0]
 	// in PSR state, and we composite from that instead of the source layer.
 	bool has_filters = !filters.empty();
@@ -3360,12 +3621,20 @@ void RenderInterface_DX12::CompositeLayers(
 		composite_srv_index = src_layer.srv_index;
 	}
 
+	// Destination is MSAA if rendering to back buffer or layer with MSAA enabled
+	bool dst_is_msaa = (msaa_samples_ > 1);
+
 	// Bind destination as render target (without DSV — passthrough PSOs have DSVFormat=UNKNOWN)
 	D3D12_CPU_DESCRIPTOR_HANDLE dst_rtv;
 	if (dst_idx < 0) {
 		// Destination is back buffer
 		dst_rtv = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
-		dst_rtv.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+		if (dst_is_msaa) {
+			// Bind MSAA intermediate render target
+			dst_rtv.ptr += static_cast<SIZE_T>(NUM_BACK_BUFFERS) * rtv_descriptor_size_;
+		} else {
+			dst_rtv.ptr += static_cast<SIZE_T>(current_back_buffer_index_) * rtv_descriptor_size_;
+		}
 	} else {
 		// Destination is a layer — it must be in RENDER_TARGET state
 		dst_rtv = GetLayerRTV(rtv_heap_.Get(), rtv_descriptor_size_, dst_idx);
@@ -3385,11 +3654,19 @@ void RenderInterface_DX12::CompositeLayers(
 	D3D12_RECT full_rect = { 0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_) };
 	command_list_->RSSetScissorRects(1, &full_rect);
 
-	// Select PSO based on blend mode
-	if (blend_mode == Rml::BlendMode::Replace) {
-		command_list_->SetPipelineState(pso_passthrough_replace_.Get());
+	// Select PSO based on blend mode and whether destination is MSAA
+	if (dst_is_msaa) {
+		if (blend_mode == Rml::BlendMode::Replace) {
+			command_list_->SetPipelineState(pso_passthrough_replace_msaa_.Get());
+		} else {
+			command_list_->SetPipelineState(pso_passthrough_blend_msaa_.Get());
+		}
 	} else {
-		command_list_->SetPipelineState(pso_passthrough_blend_.Get());
+		if (blend_mode == Rml::BlendMode::Replace) {
+			command_list_->SetPipelineState(pso_passthrough_replace_.Get());
+		} else {
+			command_list_->SetPipelineState(pso_passthrough_blend_.Get());
+		}
 	}
 
 	// Bind source texture SRV (filtered or original)
@@ -3431,10 +3708,52 @@ Rml::TextureHandle RenderInterface_DX12::SaveLayerAsTexture() {
 	int layer_idx = layer_stack_.back();
 	auto& layer = layer_pool_[layer_idx];
 
-	// Create a TextureData that references the layer's color texture and SRV.
-	// The layer stays allocated (in_use) until ReleaseTexture is called.
+	if (msaa_samples_ > 1 && layer.resolve_texture) {
+		// Resolve MSAA color texture to non-MSAA resolve texture.
+		// MSAA texture is in RENDER_TARGET state (active target).
+		// Transition: RT -> RESOLVE_SOURCE, resolve: PSR -> RESOLVE_DEST
+		D3D12_RESOURCE_BARRIER barriers[2] = {};
+		barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barriers[0].Transition.pResource = layer.color_texture.Get();
+		barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+
+		barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barriers[1].Transition.pResource = layer.resolve_texture.Get();
+		barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+		barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+
+		command_list_->ResourceBarrier(2, barriers);
+
+		command_list_->ResolveSubresource(
+			layer.resolve_texture.Get(), 0,
+			layer.color_texture.Get(), 0,
+			DXGI_FORMAT_R8G8B8A8_UNORM);
+
+		// MSAA: RESOLVE_SOURCE -> RENDER_TARGET (stays active)
+		// Resolve: RESOLVE_DEST -> PSR (ready for sampling)
+		barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+		barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+		barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+		command_list_->ResourceBarrier(2, barriers);
+
+		// TextureData references the non-MSAA resolve texture + SRV for sampling
+		auto* tex = new TextureData();
+		tex->texture = layer.resolve_texture;
+		tex->srv_index = layer.srv_index;
+		tex->width = layer.width;
+		tex->height = layer.height;
+		tex->is_layer_texture = true;
+		return reinterpret_cast<Rml::TextureHandle>(tex);
+	}
+
+	// Non-MSAA path: reference the color texture directly
 	auto* tex = new TextureData();
-	tex->texture = layer.color_texture; // AddRef via ComPtr copy
+	tex->texture = layer.color_texture;
 	tex->srv_index = layer.srv_index;
 	tex->width = layer.width;
 	tex->height = layer.height;
@@ -3456,14 +3775,50 @@ Rml::TextureHandle RenderInterface_DX12::SaveLayerAsTexture() {
 
 Rml::CompiledFilterHandle RenderInterface_DX12::SaveLayerAsMaskImage() {
 	ZoneScopedN("DX12::SaveLayerAsMaskImage");
-	// Save the current layer as a mask image. For now (Phase 5), just save the SRV reference.
-	// Actual mask application will be implemented in Phase 6 (filters).
 	if (layer_stack_.empty()) return Rml::CompiledFilterHandle(0);
 
 	int layer_idx = layer_stack_.back();
 	auto& layer = layer_pool_[layer_idx];
 
-	// Create a TextureData to hold the mask image reference
+	if (msaa_samples_ > 1 && layer.resolve_texture) {
+		// Resolve MSAA color texture to non-MSAA resolve texture for sampling as mask.
+		D3D12_RESOURCE_BARRIER barriers[2] = {};
+		barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barriers[0].Transition.pResource = layer.color_texture.Get();
+		barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+
+		barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barriers[1].Transition.pResource = layer.resolve_texture.Get();
+		barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+		barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+
+		command_list_->ResourceBarrier(2, barriers);
+
+		command_list_->ResolveSubresource(
+			layer.resolve_texture.Get(), 0,
+			layer.color_texture.Get(), 0,
+			DXGI_FORMAT_R8G8B8A8_UNORM);
+
+		barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+		barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+		barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+		command_list_->ResourceBarrier(2, barriers);
+
+		auto* tex = new TextureData();
+		tex->texture = layer.resolve_texture;
+		tex->srv_index = layer.srv_index;
+		tex->width = layer.width;
+		tex->height = layer.height;
+		tex->is_layer_texture = true;
+		return reinterpret_cast<Rml::CompiledFilterHandle>(tex);
+	}
+
+	// Non-MSAA path
 	auto* tex = new TextureData();
 	tex->texture = layer.color_texture;
 	tex->srv_index = layer.srv_index;

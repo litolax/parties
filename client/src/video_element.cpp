@@ -1,6 +1,6 @@
 #include <client/video_element.h>
 
-#include "dx12/RmlUi_Renderer_DX12.h"
+#include "RmlUi_RenderInterface_Extended.h"
 
 #include <RmlUi/Core/RenderInterface.h>
 #include <RmlUi/Core/Context.h>
@@ -179,13 +179,13 @@ void VideoElement::ReleaseResources() {
     texture_w_ = texture_h_ = 0;
 
     if (yuv_texture_) {
-        static_cast<RenderInterface_DX12*>(ri)->ReleaseYUVTexture(yuv_texture_);
+        static_cast<ExtendedRenderInterface*>(ri)->ReleaseYUVTexture(yuv_texture_);
         yuv_texture_ = 0;
     }
     yuv_tex_w_ = yuv_tex_h_ = 0;
 
     if (nv12_texture_) {
-        static_cast<RenderInterface_DX12*>(ri)->ReleaseNV12Texture(nv12_texture_);
+        static_cast<ExtendedRenderInterface*>(ri)->ReleaseNV12Texture(nv12_texture_);
         nv12_texture_ = 0;
     }
     nv12_tex_w_ = nv12_tex_h_ = 0;
@@ -279,7 +279,7 @@ void VideoElement::OnRender() {
 
     auto* ri = Rml::GetRenderInterface();
     if (!ri) return;
-    auto* dx12_ri = static_cast<RenderInterface_DX12*>(ri);
+    auto* ext_ri = static_cast<ExtendedRenderInterface*>(ri);
 
     // Rebuild geometry if element size changed
     Rml::Vector2f size = GetBox().GetSize(Rml::BoxArea::Content);
@@ -293,14 +293,14 @@ void VideoElement::OnRender() {
         // NV12 path: Y + interleaved UV, native hardware decoder format
         if (nv12_dirty_ && !nv12_y_.empty()) {
             if (nv12_texture_ && nv12_tex_w_ == frame_width_ && nv12_tex_h_ == frame_height_) {
-                dx12_ri->UpdateNV12Texture(nv12_texture_,
+                ext_ri->UpdateNV12Texture(nv12_texture_,
                     nv12_y_.data(), nv12_y_stride_,
                     nv12_uv_.data(), nv12_uv_stride_,
                     frame_width_, frame_height_);
             } else {
                 if (nv12_texture_)
-                    dx12_ri->ReleaseNV12Texture(nv12_texture_);
-                nv12_texture_ = dx12_ri->GenerateNV12Texture(
+                    ext_ri->ReleaseNV12Texture(nv12_texture_);
+                nv12_texture_ = ext_ri->GenerateNV12Texture(
                     nv12_y_.data(), nv12_y_stride_,
                     nv12_uv_.data(), nv12_uv_stride_,
                     frame_width_, frame_height_);
@@ -310,19 +310,19 @@ void VideoElement::OnRender() {
             nv12_dirty_ = false;
         }
         if (nv12_texture_)
-            dx12_ri->RenderNV12Geometry(video_geom_, offset, nv12_texture_);
+            ext_ri->RenderNV12Geometry(video_geom_, offset, nv12_texture_);
     } else if (yuv_mode_) {
         // I420 path: 3 separate R8 textures
         if (yuv_dirty_ && !yuv_y_.empty()) {
             if (yuv_texture_ && yuv_tex_w_ == frame_width_ && yuv_tex_h_ == frame_height_) {
-                dx12_ri->UpdateYUVTexture(yuv_texture_,
+                ext_ri->UpdateYUVTexture(yuv_texture_,
                     yuv_y_.data(), yuv_y_stride_,
                     yuv_u_.data(), yuv_v_.data(), yuv_uv_stride_,
                     frame_width_, frame_height_);
             } else {
                 if (yuv_texture_)
-                    dx12_ri->ReleaseYUVTexture(yuv_texture_);
-                yuv_texture_ = dx12_ri->GenerateYUVTexture(
+                    ext_ri->ReleaseYUVTexture(yuv_texture_);
+                yuv_texture_ = ext_ri->GenerateYUVTexture(
                     yuv_y_.data(), yuv_y_stride_,
                     yuv_u_.data(), yuv_v_.data(), yuv_uv_stride_,
                     frame_width_, frame_height_);
@@ -332,7 +332,7 @@ void VideoElement::OnRender() {
             yuv_dirty_ = false;
         }
         if (yuv_texture_)
-            dx12_ri->RenderYUVGeometry(video_geom_, offset, yuv_texture_);
+            ext_ri->RenderYUVGeometry(video_geom_, offset, yuv_texture_);
     } else {
         // RGBA path (fallback)
         if (frame_data_.empty()) return;
@@ -342,7 +342,7 @@ void VideoElement::OnRender() {
             Rml::Span<const Rml::byte> data{frame_data_.data(), frame_data_.size()};
 
             if (video_texture_ && texture_w_ == frame_width_ && texture_h_ == frame_height_) {
-                dx12_ri->UpdateTextureData(video_texture_, data, dims);
+                ext_ri->UpdateTextureData(video_texture_, data, dims);
             } else {
                 if (video_texture_) {
                     ri->ReleaseTexture(video_texture_);

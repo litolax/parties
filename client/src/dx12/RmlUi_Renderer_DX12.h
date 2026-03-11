@@ -1,6 +1,6 @@
 #pragma once
 
-#include <RmlUi/Core/RenderInterface.h>
+#include "../RmlUi_RenderInterface_Extended.h"
 
 #ifndef RMLUI_PLATFORM_WIN32
 	#error "DirectX 12 renderer only supported on Windows"
@@ -33,13 +33,6 @@ struct IDCompositionVisual;
 #include <array>
 #include <vector>
 
-namespace Backend {
-struct RmlRendererSettings {
-	bool vsync;
-	unsigned char msaa_sample_count;
-};
-} // namespace Backend
-
 // Internal data structures — forward declared, defined in .cpp
 struct GeometryData;
 struct TextureData;
@@ -48,32 +41,32 @@ struct CompiledFilterData;
 struct CompiledShaderData;
 struct PostprocessTarget;
 
-class RenderInterface_DX12 : public Rml::RenderInterface {
+class RenderInterface_DX12 : public ExtendedRenderInterface {
 public:
 	static constexpr int NUM_BACK_BUFFERS = 2;
 	static constexpr int SRV_HEAP_SIZE = 1024;
 	static constexpr int MAX_LAYER_COUNT = 16;
 	static constexpr int NUM_POSTPROCESS_TARGETS = 2;
-	// RTV heap: back buffers + layers + postprocess targets
-	static constexpr int RTV_HEAP_SIZE = NUM_BACK_BUFFERS + MAX_LAYER_COUNT + NUM_POSTPROCESS_TARGETS;
+	// RTV heap: back buffers + MSAA back buffer + layers + postprocess targets
+	static constexpr int RTV_HEAP_SIZE = NUM_BACK_BUFFERS + 1 + MAX_LAYER_COUNT + NUM_POSTPROCESS_TARGETS;
 
 	RenderInterface_DX12(void* p_window_handle, const Backend::RmlRendererSettings& settings);
 	~RenderInterface_DX12();
 
 	// Returns true if the renderer was successfully constructed.
-	explicit operator bool() const;
+	explicit operator bool() const override;
 
 	// The viewport should be updated whenever the window size changes.
-	void SetViewport(int viewport_width, int viewport_height, bool force = false);
+	void SetViewport(int viewport_width, int viewport_height, bool force = false) override;
 
 	// Sets up DX12 states for taking rendering commands from RmlUi.
-	void BeginFrame();
+	void BeginFrame() override;
 
 	// Optional, can be used to clear the active framebuffer.
-	void Clear();
+	void Clear() override;
 
 	// Presents to screen and synchronizes.
-	void EndFrame();
+	void EndFrame() override;
 
 	// -- Inherited from Rml::RenderInterface --
 
@@ -82,7 +75,7 @@ public:
 	void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
 
 	// Re-map existing VB with new vertex data (no GPU resource allocation).
-	void UpdateGeometryVertices(Rml::CompiledGeometryHandle geometry, Rml::Span<const Rml::Vertex> vertices);
+	void UpdateGeometryVertices(Rml::CompiledGeometryHandle geometry, Rml::Span<const Rml::Vertex> vertices) override;
 
 	Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
 	Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) override;
@@ -90,7 +83,7 @@ public:
 
 	// Updates pixel data of an existing texture in-place (no resource/SRV reallocation).
 	// Dimensions must match the original texture. For streaming video.
-	void UpdateTextureData(Rml::TextureHandle texture_handle, Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions);
+	void UpdateTextureData(Rml::TextureHandle texture_handle, Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) override;
 
 	// YUV texture support — uploads I420 planes as 3 separate R8 GPU textures,
 	// converted to RGB by a pixel shader during rendering (zero CPU conversion).
@@ -98,28 +91,28 @@ public:
 	uintptr_t GenerateYUVTexture(
 		const uint8_t* y_data, uint32_t y_stride,
 		const uint8_t* u_data, const uint8_t* v_data, uint32_t uv_stride,
-		uint32_t width, uint32_t height);
+		uint32_t width, uint32_t height) override;
 	void UpdateYUVTexture(uintptr_t handle,
 		const uint8_t* y_data, uint32_t y_stride,
 		const uint8_t* u_data, const uint8_t* v_data, uint32_t uv_stride,
-		uint32_t width, uint32_t height);
-	void ReleaseYUVTexture(uintptr_t handle);
+		uint32_t width, uint32_t height) override;
+	void ReleaseYUVTexture(uintptr_t handle) override;
 	void RenderYUVGeometry(Rml::CompiledGeometryHandle geometry,
-		Rml::Vector2f translation, uintptr_t yuv_handle);
+		Rml::Vector2f translation, uintptr_t yuv_handle) override;
 
 	// NV12 texture support — Y as R8, interleaved UV as R8G8 (2 textures instead of 3).
 	// Native format for hardware decoders (NVDEC, MFT) — no CPU deinterleave needed.
 	uintptr_t GenerateNV12Texture(
 		const uint8_t* y_data, uint32_t y_stride,
 		const uint8_t* uv_data, uint32_t uv_stride,
-		uint32_t width, uint32_t height);
+		uint32_t width, uint32_t height) override;
 	void UpdateNV12Texture(uintptr_t handle,
 		const uint8_t* y_data, uint32_t y_stride,
 		const uint8_t* uv_data, uint32_t uv_stride,
-		uint32_t width, uint32_t height);
-	void ReleaseNV12Texture(uintptr_t handle);
+		uint32_t width, uint32_t height) override;
+	void ReleaseNV12Texture(uintptr_t handle) override;
 	void RenderNV12Geometry(Rml::CompiledGeometryHandle geometry,
-		Rml::Vector2f translation, uintptr_t nv12_handle);
+		Rml::Vector2f translation, uintptr_t nv12_handle) override;
 
 	void EnableScissorRegion(bool enable) override;
 	void SetScissorRegion(Rml::Rectanglei region) override;
@@ -160,6 +153,7 @@ private:
 	bool CreateFences();
 	void CreateRenderTargetViews();
 	bool CreateDepthStencilBuffer();
+	bool CreateMSAARenderTarget();
 	bool CreatePipelineState();
 	bool CreateFullscreenQuad();
 	bool CreatePostprocessTargets();
@@ -170,6 +164,7 @@ private:
 	void ReleaseAllLayers();
 	void SetRenderTargetToLayer(int layer_index);
 	void SetRenderTargetToBackBuffer();
+	void ResolveLayer(int layer_index);
 
 	// --- Postprocess ---
 	void ReleasePostprocessTargets();
@@ -220,6 +215,8 @@ private:
 	// --- State ---
 	bool valid_ = false;
 	bool vsync_ = true;
+	uint32_t msaa_samples_ = 1;
+	uint32_t msaa_quality_ = 0;
 	int width_ = 0;
 	int height_ = 0;
 	HWND hwnd_ = nullptr;
@@ -239,6 +236,9 @@ private:
 	// RTV descriptor heap
 	ComPtr<ID3D12DescriptorHeap> rtv_heap_;
 	uint32_t rtv_descriptor_size_ = 0;
+
+	// MSAA intermediate render target (resolved to back buffer before present)
+	ComPtr<ID3D12Resource> msaa_color_texture_;
 
 	// DSV descriptor heap and depth/stencil buffer
 	ComPtr<ID3D12DescriptorHeap> dsv_heap_;
@@ -285,8 +285,10 @@ private:
 	UINT current_back_buffer_index_ = 0;
 
 	// Passthrough PSOs for layer compositing (DSVFormat=UNKNOWN, no stencil)
-	ComPtr<ID3D12PipelineState> pso_passthrough_blend_;    // premultiplied alpha blend
-	ComPtr<ID3D12PipelineState> pso_passthrough_replace_;  // no blending, overwrite
+	ComPtr<ID3D12PipelineState> pso_passthrough_blend_;    // premultiplied alpha blend (non-MSAA)
+	ComPtr<ID3D12PipelineState> pso_passthrough_replace_;  // no blending, overwrite (non-MSAA)
+	ComPtr<ID3D12PipelineState> pso_passthrough_blend_msaa_;   // premultiplied alpha blend (MSAA)
+	ComPtr<ID3D12PipelineState> pso_passthrough_replace_msaa_; // no blending, overwrite (MSAA)
 
 	// Phase 6 PSOs for filters and shaders (DSVFormat=UNKNOWN, no stencil)
 	ComPtr<ID3D12PipelineState> pso_color_matrix_;         // color matrix filter

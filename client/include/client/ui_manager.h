@@ -11,7 +11,7 @@
 
 // Forward declarations — avoid pulling windows.h into header
 typedef struct HWND__* HWND;
-class RenderInterface_DX12;
+class ExtendedRenderInterface;
 class SystemInterface_Win32;
 class TextInputMethodEditor_Win32;
 
@@ -22,7 +22,8 @@ public:
     UiManager();
     ~UiManager();
 
-    bool init(HWND hwnd);
+    // renderer_id: 0=DX12, 1=DX11, 2=DX12WL
+    bool init(HWND hwnd, int renderer_id = 0);
     void shutdown();
 
     Rml::ElementDocument* load_document(const std::string& path);
@@ -56,12 +57,12 @@ public:
 
     // Accessors for WndProc in main.cpp
     TextInputMethodEditor_Win32& text_input_editor();
-    RenderInterface_DX12* dx12_renderer() { return render_interface_.get(); }
+    ExtendedRenderInterface* renderer() { return render_interface_.get(); }
     float dpi_scale() const { return dpi_scale_; }
     bool is_minimized() const { return minimized_; }
 
 private:
-    std::unique_ptr<RenderInterface_DX12> render_interface_;
+    std::unique_ptr<ExtendedRenderInterface> render_interface_;
     std::unique_ptr<SystemInterface_Win32> system_interface_;
     std::unique_ptr<TextInputMethodEditor_Win32> text_input_editor_;
     EmbeddedFileInterface file_interface_;

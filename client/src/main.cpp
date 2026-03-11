@@ -6,13 +6,13 @@
 #include <parties/profiler.h>
 
 #include "RmlUi_Platform_Win32.h"
-#include "dx12/RmlUi_Renderer_DX12.h"
 
 #include <dwmapi.h>
 #include <windowsx.h>
 #include <RmlUi/Debugger.h>
 
 #include <cstdio>
+#include <cstring>
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -248,9 +248,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 // Entry point
 // ═══════════════════════════════════════════════════════════════════════
 
-int main(int /*argc*/, char* /*argv*/[]) {
+int main(int argc, char* argv[]) {
     TracySetThreadName("Main");
     std::printf("%s Client v%s\n", parties::APP_NAME, parties::APP_VERSION);
+
+    // Parse command-line flags for renderer selection
+    // --dx11    = DirectX 11
+    // --dx12wl  = DirectX 12 (WL backend)
+    // default   = DirectX 12 (custom backend)
+    enum class Renderer { DX12, DX11, DX12WL };
+    Renderer renderer = Renderer::DX12;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--dx11") == 0)
+            renderer = Renderer::DX11;
+        else if (std::strcmp(argv[i], "--dx12wl") == 0)
+            renderer = Renderer::DX12WL;
+    }
 
     // Per-monitor DPI awareness (must be set before creating any windows)
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -293,10 +306,16 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
     // Create borderless window. WS_CAPTION enables DWM minimize/restore
     // animations; WM_NCCALCSIZE collapses the caption to zero pixels.
+    const wchar_t* window_title;
+    switch (renderer) {
+    case Renderer::DX11:   window_title = L"Parties (DirectX 11)"; break;
+    case Renderer::DX12WL: window_title = L"Parties (DirectX 12 WL)"; break;
+    default:               window_title = L"Parties (DirectX 12)"; break;
+    }
     HWND hwnd = CreateWindowExW(
         0,
         L"PartiesClient",
-        L"Parties",
+        window_title,
         WS_POPUP | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
         nullptr, nullptr, wc.hInstance, nullptr);
@@ -317,7 +336,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     App app;
     SetPropW(hwnd, L"App", &app);
 
-    if (!app.init(hwnd)) {
+    if (!app.init(hwnd, static_cast<int>(renderer))) {
         std::fprintf(stderr, "Failed to initialize application\n");
         SetPropW(hwnd, L"App", nullptr);
         DestroyWindow(hwnd);

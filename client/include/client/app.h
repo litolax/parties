@@ -42,7 +42,8 @@ public:
     App();
     ~App();
 
-    bool init(HWND hwnd);
+    // renderer_id: 0=DX12, 1=DX11, 2=DX12WL
+    bool init(HWND hwnd, int renderer_id = 0);
     void shutdown();
 
     // Main loop tick (called each frame)

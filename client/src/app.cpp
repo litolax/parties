@@ -767,7 +767,7 @@ void App::refresh_server_list() {
     server_model_.dirty("servers");
 }
 
-bool App::init(HWND hwnd) {
+bool App::init(HWND hwnd, int renderer_id) {
     hwnd_ = hwnd;
 
     // Open client settings database
@@ -786,7 +786,7 @@ bool App::init(HWND hwnd) {
     }
 
     // Initialize UI
-    if (!ui_.init(hwnd)) return false;
+    if (!ui_.init(hwnd, renderer_id)) return false;
 
     // Set up data model callbacks and register with RmlUi context
     // (must happen before loading documents which reference data models)

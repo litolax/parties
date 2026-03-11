@@ -1,6 +1,6 @@
 #include <client/level_meter_element.h>
 
-#include "dx12/RmlUi_Renderer_DX12.h"
+#include "RmlUi_RenderInterface_Extended.h"
 
 #include <RmlUi/Core/RenderInterface.h>
 #include <parties/profiler.h>
@@ -75,7 +75,7 @@ void LevelMeterElement::UpdateVertices() {
     if (!geom_) return;
     auto* ri = Rml::GetRenderInterface();
     if (!ri) return;
-    auto* dx12_ri = static_cast<RenderInterface_DX12*>(ri);
+    auto* ext_ri = static_cast<ExtendedRenderInterface*>(ri);
 
     float w = cached_w_;
     float h = cached_h_;
@@ -103,7 +103,7 @@ void LevelMeterElement::UpdateVertices() {
     vertices[6] = {{marker_x + marker_w, h}, red, {0, 0}};
     vertices[7] = {{marker_x, h}, red, {0, 0}};
 
-    dx12_ri->UpdateGeometryVertices(geom_, {vertices, 8});
+    ext_ri->UpdateGeometryVertices(geom_, {vertices, 8});
     dirty_ = false;
 }
 

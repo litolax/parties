@@ -1,7 +1,10 @@
 #include <client/ui_manager.h>
 #include <parties/profiler.h>
 
-#include "RmlUi_Renderer_DX12.h"
+#include "RmlUi_RenderInterface_Extended.h"
+#include "dx12/RmlUi_Renderer_DX12.h"
+#include "dx12/RmlUi_Renderer_DX12WL.h"
+#include "dx11/RmlUi_Renderer_DX11.h"
 #include "RmlUi_Platform_Win32.h"
 
 #include <RmlUi/Debugger.h>
@@ -32,7 +35,7 @@ private:
 UiManager::UiManager() = default;
 UiManager::~UiManager() { shutdown(); }
 
-bool UiManager::init(HWND hwnd) {
+bool UiManager::init(HWND hwnd, int renderer_id) {
 	ZoneScopedN("UiManager::init");
     hwnd_ = hwnd;
 
@@ -43,15 +46,31 @@ bool UiManager::init(HWND hwnd) {
     Rml::SetSystemInterface(system_interface_.get());
     Rml::SetFileInterface(&file_interface_);
 
-    // Create DX12 render interface
+    // Create render interface
     Backend::RmlRendererSettings settings{};
     settings.vsync = true;
-    settings.msaa_sample_count = 1;
+    settings.msaa_sample_count = 4;
 
-    render_interface_ = std::make_unique<RenderInterface_DX12>(
-        static_cast<void*>(hwnd), settings);
+    const char* renderer_name;
+    switch (renderer_id) {
+    case 1:  // DX11
+        render_interface_ = std::make_unique<RenderInterface_DX11>(
+            static_cast<void*>(hwnd), settings);
+        renderer_name = "DX11";
+        break;
+    case 2:  // DX12WL
+        render_interface_ = std::make_unique<RenderInterface_DX12WL>(
+            static_cast<void*>(hwnd), settings);
+        renderer_name = "DX12WL";
+        break;
+    default: // DX12
+        render_interface_ = std::make_unique<RenderInterface_DX12>(
+            static_cast<void*>(hwnd), settings);
+        renderer_name = "DX12";
+        break;
+    }
     if (!*render_interface_) {
-        std::fprintf(stderr, "[UI] Failed to create DX12 render interface\n");
+        std::fprintf(stderr, "[UI] Failed to create %s render interface\n", renderer_name);
         return false;
     }
 
@@ -99,7 +118,7 @@ bool UiManager::init(HWND hwnd) {
     text_input_editor_ = std::make_unique<TextInputMethodEditor_Win32>();
 
     initialised_ = true;
-    std::printf("[UI] Initialised DX12 (%dx%d, DPI scale=%.2f)\n", width, height, dpi_scale_);
+    std::printf("[UI] Initialised %s (%dx%d, DPI scale=%.2f)\n", renderer_name, width, height, dpi_scale_);
     return true;
 }
 
