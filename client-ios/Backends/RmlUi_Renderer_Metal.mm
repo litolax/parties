@@ -156,11 +156,18 @@ struct MetalTexture {
     int height;
 };
 
+// Triple-buffered NV12 texture pair.
+// Each frame we advance to the next slot (slot = (slot+1) % kSlots).
+// The slot being written to was last used 2 frames ago, so the GPU
+// has had ≥2 frame-times to finish reading it — safe to overwrite
+// without explicit CPU/GPU synchronization.
 struct MetalNV12Texture {
-    id<MTLTexture> y_tex;
-    id<MTLTexture> uv_tex;
-    uint32_t width;
-    uint32_t height;
+    static constexpr int kSlots = 3;
+    id<MTLTexture> y_tex[kSlots]  = {nil, nil, nil};
+    id<MTLTexture> uv_tex[kSlots] = {nil, nil, nil};
+    uint32_t width  = 0;
+    uint32_t height = 0;
+    int slot        = 0;  // most recently written slot; render from here
 };
 
 // Gradient uniforms — layout must match GradientUniforms in the MSL shader exactly.
@@ -998,10 +1005,14 @@ uintptr_t RenderInterface_Metal::GenerateNV12Texture(
     auto* t = new MetalNV12Texture();
     t->width  = width;
     t->height = height;
-    t->y_tex  = MakeTexture(m_data->device, MTLPixelFormatR8Unorm,  width,     height);
-    t->uv_tex = MakeTexture(m_data->device, MTLPixelFormatRG8Unorm, width / 2, height / 2);
-    UploadPlane(t->y_tex,  y_data,  y_stride,  width,     height);
-    UploadPlane(t->uv_tex, uv_data, uv_stride, width / 2, height / 2);
+    t->slot   = 0;
+    for (int i = 0; i < MetalNV12Texture::kSlots; i++) {
+        t->y_tex[i]  = MakeTexture(m_data->device, MTLPixelFormatR8Unorm,  width,     height);
+        t->uv_tex[i] = MakeTexture(m_data->device, MTLPixelFormatRG8Unorm, width / 2, height / 2);
+    }
+    // Seed slot 0 with the initial frame data; other slots will be filled in naturally.
+    UploadPlane(t->y_tex[0],  y_data,  y_stride,  width,     height);
+    UploadPlane(t->uv_tex[0], uv_data, uv_stride, width / 2, height / 2);
     return reinterpret_cast<uintptr_t>(t);
 }
 
@@ -1012,8 +1023,10 @@ void RenderInterface_Metal::UpdateNV12Texture(uintptr_t handle,
 {
     if (!handle) return;
     auto* t = reinterpret_cast<MetalNV12Texture*>(handle);
-    UploadPlane(t->y_tex,  y_data,  y_stride,  width,     height);
-    UploadPlane(t->uv_tex, uv_data, uv_stride, width / 2, height / 2);
+    // Advance to the next slot — it was last rendered 2+ frames ago, safe to overwrite.
+    t->slot = (t->slot + 1) % MetalNV12Texture::kSlots;
+    UploadPlane(t->y_tex[t->slot],  y_data,  y_stride,  width,     height);
+    UploadPlane(t->uv_tex[t->slot], uv_data, uv_stride, width / 2, height / 2);
 }
 
 void RenderInterface_Metal::ReleaseNV12Texture(uintptr_t handle)
@@ -1045,8 +1058,8 @@ void RenderInterface_Metal::RenderNV12Geometry(Rml::CompiledGeometryHandle geome
 
     [enc setVertexBuffer:geo->vertex_buffer offset:0 atIndex:0];
     [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
-    [enc setFragmentTexture:t->y_tex  atIndex:0];
-    [enc setFragmentTexture:t->uv_tex atIndex:1];
+    [enc setFragmentTexture:t->y_tex[t->slot]  atIndex:0];
+    [enc setFragmentTexture:t->uv_tex[t->slot] atIndex:1];
     [enc setFragmentSamplerState:m_data->sampler atIndex:0];
 
     [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
