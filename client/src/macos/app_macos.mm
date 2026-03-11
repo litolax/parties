@@ -337,7 +337,6 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     // ── Fonts ─────────────────────────────────────────────────────────────
     Rml::LoadFontFace("ui/fonts/NotoSans-Regular.ttf");
     Rml::LoadFontFace("ui/fonts/NotoSans-Bold.ttf");
-    Rml::LoadFontFace("ui/fonts/NotoSans-Italic.ttf");
 
     // ── App state ─────────────────────────────────────────────────────────
     _authenticated      = false;
