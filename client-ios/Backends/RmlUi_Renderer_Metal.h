@@ -1,6 +1,6 @@
 #pragma once
 
-#include <RmlUi/Core/RenderInterface.h>
+#include "RmlUi_RenderInterface_Extended.h"
 #include <RmlUi/Core/Types.h>
 
 #ifdef __OBJC__
@@ -9,14 +9,14 @@
 #endif
 
 /**
- * Metal render interface for RmlUi on iOS.
+ * Metal render interface for RmlUi on iOS/macOS.
  *
  * Usage per frame (from MTKViewDelegate):
  *   renderer.BeginFrame(commandBuffer, renderPassDescriptor);
  *   rml_context->Render();
  *   renderer.EndFrame();   // encodes draw calls into commandBuffer
  */
-class RenderInterface_Metal : public Rml::RenderInterface {
+class RenderInterface_Metal : public ExtendedRenderInterface {
 public:
 #ifdef __OBJC__
     /// Initialize with an existing Metal device and MTKView (used to obtain pixel format).
@@ -29,7 +29,7 @@ public:
     ~RenderInterface_Metal();
 
     /// Update the viewport dimensions (call when the drawable size changes).
-    void SetViewport(int width, int height);
+    void SetViewport(int width, int height, bool force = false) override;
 
     /// Set the Y pixel offset into the framebuffer where the Metal viewport begins.
     /// Used on iPhone to push all rendering (including the debugger) below the Dynamic Island.
@@ -70,6 +70,28 @@ public:
                       Rml::Vector2f translation,
                       Rml::TextureHandle texture) override;
     void ReleaseShader(Rml::CompiledShaderHandle shader) override;
+
+    // ---- NV12 video texture (Y plane R8 + UV plane RG8) ----
+    uintptr_t GenerateNV12Texture(
+        const uint8_t* y_data, uint32_t y_stride,
+        const uint8_t* uv_data, uint32_t uv_stride,
+        uint32_t width, uint32_t height) override;
+    void UpdateNV12Texture(uintptr_t handle,
+        const uint8_t* y_data, uint32_t y_stride,
+        const uint8_t* uv_data, uint32_t uv_stride,
+        uint32_t width, uint32_t height) override;
+    void ReleaseNV12Texture(uintptr_t handle) override;
+    void RenderNV12Geometry(Rml::CompiledGeometryHandle geometry,
+        Rml::Vector2f translation, uintptr_t nv12_handle) override;
+
+    // ---- YUV (I420) stubs — not used on Metal ----
+    uintptr_t GenerateYUVTexture(
+        const uint8_t*, uint32_t, const uint8_t*, const uint8_t*, uint32_t,
+        uint32_t, uint32_t) override { return 0; }
+    void UpdateYUVTexture(uintptr_t, const uint8_t*, uint32_t,
+        const uint8_t*, const uint8_t*, uint32_t, uint32_t, uint32_t) override {}
+    void ReleaseYUVTexture(uintptr_t) override {}
+    void RenderYUVGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, uintptr_t) override {}
 
 private:
     struct Data;

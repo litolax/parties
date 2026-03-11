@@ -9,6 +9,8 @@
 #include <mutex>
 #include <vector>
 
+struct Dav1dContext;
+
 // VideoToolbox-based decoder for the screen share stream.
 // Primary codec is AV1 (kCMVideoCodecType_AV1, iOS 16+, A14+ hardware).
 // H265 and H264 are supported as fallbacks.
@@ -42,7 +44,11 @@ public:
 
 private:
     // AV1: format desc created from the first keyframe's Sequence Header OBU.
+    // Falls back to dav1d software decode if VT can't create a session.
     bool setup_av1(const uint8_t* data, size_t len);
+
+    // dav1d software decode path (used when use_dav1d_ == true).
+    void decode_dav1d(const uint8_t* data, size_t len);
 
     // H264: parse SPS+PPS from an Annex-B keyframe, build format desc.
     bool setup_h264(const uint8_t* data, size_t len);
@@ -74,6 +80,10 @@ private:
     CMVideoFormatDescriptionRef fmt_desc_ = nullptr;
     VTDecompressionSessionRef   session_  = nullptr;
     bool                        ready_    = false;
+
+    // dav1d software fallback (AV1 on devices without VT AV1 support, e.g. M1).
+    Dav1dContext* dav1d_ctx_  = nullptr;
+    bool          use_dav1d_  = false;
 
     std::mutex mutex_;
 };

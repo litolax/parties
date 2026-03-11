@@ -17,7 +17,7 @@
   ],
   "features": {
     "client": {
-      "description": "Client GUI dependencies",
+      "description": "Client GUI dependencies (Windows/Linux)",
       "dependencies": [
         "amd-amf",
         "d3d12-memory-allocator",
@@ -25,6 +25,19 @@
         "dav1d",
         "libhevc",
         "openh264",
+        {
+          "name": "rmlui",
+          "features": ["svg"]
+        },
+        "rnnoise",
+        "speexdsp"
+      ]
+    },
+    "client-macos": {
+      "description": "Client GUI dependencies (macOS)",
+      "dependencies": [
+        "dav1d",
+        "miniaudio",
         {
           "name": "rmlui",
           "features": ["svg"]

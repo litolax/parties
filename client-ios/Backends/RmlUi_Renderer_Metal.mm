@@ -2,7 +2,11 @@
 
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
+#if TARGET_OS_IOS
 #import <UIKit/UIKit.h>
+#else
+#import <AppKit/AppKit.h>
+#endif
 #import <simd/simd.h>
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/DecorationTypes.h>
@@ -55,6 +59,29 @@ fragment float4 rmlui_fragment_texture(VertexOut in         [[stage_in]],
                                        sampler samp         [[sampler(0)]])
 {
     return in.color * tex.sample(samp, in.texcoord);
+}
+
+// ---- NV12 video shader -----------------------------------------------------------
+// Y plane: texture(0) R8Unorm, full resolution
+// UV plane: texture(1) RG8Unorm, half resolution (U=r, V=g)
+// BT.709 limited range YCbCr -> RGB
+fragment float4 rmlui_fragment_nv12(VertexOut in          [[stage_in]],
+                                    texture2d<float> y_tex  [[texture(0)]],
+                                    texture2d<float> uv_tex [[texture(1)]],
+                                    sampler samp            [[sampler(0)]])
+{
+    float  y  = y_tex.sample(samp, in.texcoord).r;
+    float2 uv = uv_tex.sample(samp, in.texcoord).rg;
+
+    // BT.709 limited range offsets/scales
+    float Y  = (y    - 16.0/255.0) * (255.0/219.0);
+    float Cb = (uv.r - 128.0/255.0) * (255.0/224.0);
+    float Cr = (uv.g - 128.0/255.0) * (255.0/224.0);
+
+    float r = Y + 1.5748 * Cr;
+    float g = Y - 0.1873 * Cb - 0.4681 * Cr;
+    float b = Y + 1.8556 * Cb;
+    return float4(clamp(float3(r, g, b), 0.0, 1.0), 1.0);
 }
 
 // ---- Gradient shader -------------------------------------------------------------
@@ -129,6 +156,13 @@ struct MetalTexture {
     int height;
 };
 
+struct MetalNV12Texture {
+    id<MTLTexture> y_tex;
+    id<MTLTexture> uv_tex;
+    uint32_t width;
+    uint32_t height;
+};
+
 // Gradient uniforms — layout must match GradientUniforms in the MSL shader exactly.
 #define MAX_GRADIENT_STOPS 16
 struct GradientUniforms {
@@ -164,6 +198,7 @@ struct RenderInterface_Metal::Data {
     id<MTLRenderPipelineState> pipeline_texture;  // textured, color writes enabled
     id<MTLRenderPipelineState> pipeline_stencil;  // untextured, color writes disabled (stencil only)
     id<MTLRenderPipelineState> pipeline_gradient; // gradient shader (linear/radial/conic)
+    id<MTLRenderPipelineState> pipeline_nv12;     // NV12 video (Y + UV planes)
     id<MTLSamplerState>        sampler;
 
     // Depth-stencil states
@@ -336,11 +371,13 @@ RenderInterface_Metal::RenderInterface_Metal(id<MTLDevice> device, MTKView* view
     m_data->pipeline_texture  = BuildPipeline(device, library, @"rmlui_fragment_texture",  color_fmt, stencil_fmt, YES);
     m_data->pipeline_stencil  = BuildPipeline(device, library, @"rmlui_fragment_color",    color_fmt, stencil_fmt, NO);
     m_data->pipeline_gradient = BuildPipeline(device, library, @"rmlui_fragment_gradient", color_fmt, stencil_fmt, YES);
-    NSLog(@"[RmlUi] Pipelines: color=%s texture=%s stencil=%s gradient=%s",
+    m_data->pipeline_nv12     = BuildPipeline(device, library, @"rmlui_fragment_nv12",     color_fmt, stencil_fmt, YES);
+    NSLog(@"[RmlUi] Pipelines: color=%s texture=%s stencil=%s gradient=%s nv12=%s",
           m_data->pipeline_color    ? "OK" : "FAILED",
           m_data->pipeline_texture  ? "OK" : "FAILED",
           m_data->pipeline_stencil  ? "OK" : "FAILED",
-          m_data->pipeline_gradient ? "OK" : "FAILED");
+          m_data->pipeline_gradient ? "OK" : "FAILED",
+          m_data->pipeline_nv12     ? "OK" : "FAILED");
 
     // Depth-stencil states
     m_data->dss_normal     = BuildDSS(device, MTLCompareFunctionAlways, MTLStencilOperationKeep,           0);
@@ -368,7 +405,7 @@ RenderInterface_Metal::~RenderInterface_Metal()
 
 // ---- Frame control ---------------------------------------------------------------
 
-void RenderInterface_Metal::SetViewport(int width, int height)
+void RenderInterface_Metal::SetViewport(int width, int height, bool /*force*/)
 {
     if (!m_data) return;
     m_data->viewport_width  = width;
@@ -553,17 +590,25 @@ Rml::TextureHandle RenderInterface_Metal::LoadTexture(Rml::Vector2i& texture_dim
         return reinterpret_cast<Rml::TextureHandle>(tex);
     }
 
-    // ── Raster image (PNG/JPG) via UIImage ──────────────────────────────────
+    // ── Raster image (PNG/JPG) via platform image class ──────────────────────
     NSString* path = [NSString stringWithUTF8String:source.c_str()];
-    UIImage*  image = [UIImage imageNamed:path];
+#if TARGET_OS_IOS
+    UIImage* image = [UIImage imageNamed:path];
     if (!image) {
-        // Try loading from the bundle by path
         image = [UIImage imageWithContentsOfFile:
                  [[NSBundle mainBundle] pathForResource:path ofType:nil]];
     }
     if (!image) return 0;
-
     CGImageRef cg_image = image.CGImage;
+#else
+    NSImage* nsimage = [NSImage imageNamed:path];
+    if (!nsimage) {
+        nsimage = [[NSImage alloc] initWithContentsOfFile:
+                   [[NSBundle mainBundle] pathForResource:path ofType:nil]];
+    }
+    if (!nsimage) return 0;
+    CGImageRef cg_image = [nsimage CGImageForProposedRect:nil context:nil hints:nil];
+#endif
     size_t w = CGImageGetWidth(cg_image);
     size_t h = CGImageGetHeight(cg_image);
     texture_dimensions = {(int)w, (int)h};
@@ -915,4 +960,98 @@ void RenderInterface_Metal::RenderShader(Rml::CompiledShaderHandle shader_handle
 void RenderInterface_Metal::ReleaseShader(Rml::CompiledShaderHandle handle)
 {
     delete reinterpret_cast<CompiledShader_Metal*>(handle);
+}
+
+// ---- NV12 video texture ----------------------------------------------------------
+
+static id<MTLTexture> MakeTexture(id<MTLDevice> device,
+                                   MTLPixelFormat fmt,
+                                   uint32_t width, uint32_t height)
+{
+    MTLTextureDescriptor* td = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:fmt
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    return [device newTextureWithDescriptor:td];
+}
+
+// stride parameters are bytes-per-row (as returned by CVPixelBufferGetBytesPerRowOfPlane)
+static void UploadPlane(id<MTLTexture> tex,
+                        const uint8_t* data, uint32_t bytes_per_row,
+                        uint32_t width, uint32_t height)
+{
+    [tex replaceRegion:MTLRegionMake2D(0, 0, width, height)
+           mipmapLevel:0
+             withBytes:data
+           bytesPerRow:bytes_per_row];
+}
+
+uintptr_t RenderInterface_Metal::GenerateNV12Texture(
+    const uint8_t* y_data, uint32_t y_stride,
+    const uint8_t* uv_data, uint32_t uv_stride,
+    uint32_t width, uint32_t height)
+{
+    if (!m_data) return 0;
+    auto* t = new MetalNV12Texture();
+    t->width  = width;
+    t->height = height;
+    t->y_tex  = MakeTexture(m_data->device, MTLPixelFormatR8Unorm,  width,     height);
+    t->uv_tex = MakeTexture(m_data->device, MTLPixelFormatRG8Unorm, width / 2, height / 2);
+    UploadPlane(t->y_tex,  y_data,  y_stride,  width,     height);
+    UploadPlane(t->uv_tex, uv_data, uv_stride, width / 2, height / 2);
+    return reinterpret_cast<uintptr_t>(t);
+}
+
+void RenderInterface_Metal::UpdateNV12Texture(uintptr_t handle,
+    const uint8_t* y_data, uint32_t y_stride,
+    const uint8_t* uv_data, uint32_t uv_stride,
+    uint32_t width, uint32_t height)
+{
+    if (!handle) return;
+    auto* t = reinterpret_cast<MetalNV12Texture*>(handle);
+    UploadPlane(t->y_tex,  y_data,  y_stride,  width,     height);
+    UploadPlane(t->uv_tex, uv_data, uv_stride, width / 2, height / 2);
+}
+
+void RenderInterface_Metal::ReleaseNV12Texture(uintptr_t handle)
+{
+    if (!handle) return;
+    delete reinterpret_cast<MetalNV12Texture*>(handle);
+}
+
+void RenderInterface_Metal::RenderNV12Geometry(Rml::CompiledGeometryHandle geometry,
+                                                Rml::Vector2f translation,
+                                                uintptr_t nv12_handle)
+{
+    if (!m_data || !m_data->current_encoder || !geometry || !nv12_handle) return;
+    if (!m_data->pipeline_nv12) return;
+
+    auto* geo = reinterpret_cast<MetalGeometry*>(geometry);
+    auto* t   = reinterpret_cast<MetalNV12Texture*>(nv12_handle);
+    id<MTLRenderCommandEncoder> enc = m_data->current_encoder;
+
+    [enc setDepthStencilState:m_data->active_dss];
+    [enc setStencilReferenceValue:m_data->active_stencil_ref];
+    [enc setRenderPipelineState:m_data->pipeline_nv12];
+
+    Uniforms u;
+    simd_float4x4 proj = OrthoMatrix((float)m_data->viewport_width, (float)m_data->viewport_height);
+    u.transform   = m_data->has_transform ? simd_mul(proj, RmlMatrixToSimd(m_data->transform)) : proj;
+    u.translation = {translation.x, translation.y};
+    u._padding    = {0.0f, 0.0f};
+
+    [enc setVertexBuffer:geo->vertex_buffer offset:0 atIndex:0];
+    [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+    [enc setFragmentTexture:t->y_tex  atIndex:0];
+    [enc setFragmentTexture:t->uv_tex atIndex:1];
+    [enc setFragmentSamplerState:m_data->sampler atIndex:0];
+
+    [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                    indexCount:geo->index_count
+                     indexType:MTLIndexTypeUInt32
+                   indexBuffer:geo->index_buffer
+             indexBufferOffset:0];
 }

@@ -3,6 +3,9 @@
 #include <parties/video_common.h>
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreVideo/CoreVideo.h>
+
+#include <dav1d/dav1d.h>
 
 #include <cstring>
 #include <cstdio>
@@ -59,6 +62,12 @@ void VideoDecoderIOS::shutdown()
         CFRelease(fmt_desc_);
         fmt_desc_ = nullptr;
     }
+    if (dav1d_ctx_) {
+        dav1d_flush(dav1d_ctx_);
+        dav1d_close(&dav1d_ctx_);
+        dav1d_ctx_ = nullptr;
+    }
+    use_dav1d_ = false;
     ready_ = false;
 }
 
@@ -112,13 +121,29 @@ bool VideoDecoderIOS::setup_av1(const uint8_t* data, size_t len)
     }
     fprintf(stderr, "[VideoDecoderIOS] AV1: Sequence Header OBU found (%zu bytes)\n", seq_len);
 
+    // Extract seq_profile from OBU payload (bits [7:5] of first payload byte).
+    // Skip OBU header (1 byte), optional extension byte, optional LEB128 size field.
+    uint8_t seq_profile = 0;
+    {
+        const uint8_t* p = seq_ptr;
+        uint8_t obu_hdr = *p++;
+        if ((obu_hdr >> 2) & 1) p++;   // skip extension byte if present
+        if ((obu_hdr >> 1) & 1) {       // skip LEB128 size field if present
+            while (p < seq_ptr + seq_len && (*p & 0x80)) p++;
+            if (p < seq_ptr + seq_len) p++;
+        }
+        if (p < seq_ptr + seq_len)
+            seq_profile = (*p >> 5) & 0x07;
+    }
+
     // Build AV1CodecConfigurationRecord (av1C):
     //   4-byte fixed header  +  raw Sequence Header OBU as configOBUs payload.
     //   header[0] = 0x81 : marker=1, version=1
-    //   header[1] = 0x00 : seq_profile=0, seq_level_idx_0=0
+    //   header[1] : seq_profile(3) | seq_level_idx_0(5) — use level 0x1F (max) so
+    //               VideoToolbox doesn't reject sessions for high-resolution streams
     //   header[2] = 0x0C : chroma_subsampling_x=1, chroma_subsampling_y=1 (4:2:0)
     //   header[3] = 0x00 : initial_presentation_delay_present=0
-    const uint8_t av1c_hdr[4] = { 0x81, 0x00, 0x0C, 0x00 };
+    const uint8_t av1c_hdr[4] = { 0x81, (uint8_t)((seq_profile << 5) | 0x1F), 0x0C, 0x00 };
     std::vector<uint8_t> av1c;
     av1c.reserve(4 + seq_len);
     av1c.insert(av1c.end(), av1c_hdr, av1c_hdr + 4);
@@ -152,9 +177,27 @@ bool VideoDecoderIOS::setup_av1(const uint8_t* data, size_t len)
         fprintf(stderr,
                 "[VideoDecoderIOS] CMVideoFormatDescriptionCreate(AV1+av1C) failed: %d\n",
                 (int)status);
+        goto try_dav1d;
+    }
+    if (create_session()) return true;
+
+try_dav1d:
+    // VT doesn't support AV1 on this device (e.g. M1 has no AV1 hardware).
+    // Fall back to dav1d software decoder.
+    {
+        Dav1dSettings settings;
+        dav1d_default_settings(&settings);
+        settings.n_threads = 4;
+        settings.max_frame_delay = 1;
+        if (dav1d_open(&dav1d_ctx_, &settings) == 0) {
+            use_dav1d_ = true;
+            ready_     = true;
+            fprintf(stderr, "[VideoDecoderIOS] AV1: using dav1d software decoder\n");
+            return true;
+        }
+        fprintf(stderr, "[VideoDecoderIOS] AV1: dav1d_open failed\n");
         return false;
     }
-    return create_session();
 }
 
 // Parse NAL units from an Annex-B stream and collect those matching any of the
@@ -297,7 +340,7 @@ bool VideoDecoderIOS::create_session()
     OSStatus status = VTDecompressionSessionCreate(
         kCFAllocatorDefault,
         fmt_desc_,
-        nullptr,      // videoDecoderSpecification (let VT choose)
+        nullptr,    // videoDecoderSpecification — let VT pick hw or sw
         dest_attrs,
         &cb,
         &session_);
@@ -383,13 +426,24 @@ void VideoDecoderIOS::decode(const uint8_t* data, size_t len, bool is_keyframe)
 
     if (!ready_) {
         // All codecs wait for the first keyframe to set up the VT session.
-        if (!is_keyframe) return;
+        if (!is_keyframe) {
+            fprintf(stderr, "[VideoDecoderIOS] waiting for keyframe (not ready)\n");
+            return;
+        }
 
+        fprintf(stderr, "[VideoDecoderIOS] setting up session for keyframe len=%zu\n", len);
         bool ok = false;
         if      (codec_ == VideoCodecId::H264) ok = setup_h264(data, len);
         else if (codec_ == VideoCodecId::H265) ok = setup_h265(data, len);
         else if (codec_ == VideoCodecId::AV1)  ok = setup_av1(data, len);
+        fprintf(stderr, "[VideoDecoderIOS] session setup: %s\n", ok ? "OK" : "FAILED");
         if (!ok) return;
+    }
+
+    // dav1d software path (AV1 on devices without VT AV1 support).
+    if (use_dav1d_) {
+        decode_dav1d(data, len);
+        return;
     }
 
     // For AV1 feed raw OBU bytes directly; no Annex-B conversion needed.
@@ -451,6 +505,93 @@ void VideoDecoderIOS::flush()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (session_) VTDecompressionSessionFinishDelayedFrames(session_);
+    if (dav1d_ctx_) dav1d_flush(dav1d_ctx_);
+}
+
+// ── dav1d software decode (AV1 fallback) ──────────────────────────────────────
+
+void VideoDecoderIOS::decode_dav1d(const uint8_t* data, size_t len)
+{
+    // Allocate dav1d-owned buffer and copy frame data into it.
+    Dav1dData dd = {};
+    uint8_t* buf = dav1d_data_create(&dd, len);
+    if (!buf) return;
+    std::memcpy(buf, data, len);
+
+    while (dd.sz > 0) {
+        int ret = dav1d_send_data(dav1d_ctx_, &dd);
+        if (ret < 0 && ret != DAV1D_ERR(EAGAIN)) {
+            fprintf(stderr, "[VideoDecoderIOS] dav1d_send_data failed: %d\n", ret);
+            dav1d_data_unref(&dd);
+            return;
+        }
+
+        // Drain all available decoded pictures.
+        Dav1dPicture pic = {};
+        while (dav1d_get_picture(dav1d_ctx_, &pic) == 0) {
+            if (on_decoded) {
+                // Convert dav1d I420/I010 to NV12 CVPixelBuffer for Metal display.
+                // Only 8-bit (bpc==8) is handled; 10-bit is currently unsupported.
+                bool is_10bit = (pic.p.bpc == 10);
+                OSType pix_fmt = is_10bit
+                    ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange   // P010
+                    : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;   // NV12
+
+                CFStringRef attrs_keys[1]   = { kCVPixelBufferMetalCompatibilityKey };
+                CFTypeRef   attrs_values[1] = { kCFBooleanTrue };
+                CFDictionaryRef attrs = CFDictionaryCreate(
+                    nullptr,
+                    (const void**)attrs_keys, (const void**)attrs_values, 1,
+                    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+                CVPixelBufferRef cvbuf = nullptr;
+                CVReturn cv = CVPixelBufferCreate(
+                    kCFAllocatorDefault,
+                    (size_t)pic.p.w, (size_t)pic.p.h,
+                    pix_fmt, attrs, &cvbuf);
+                CFRelease(attrs);
+
+                if (cv == kCVReturnSuccess && cvbuf) {
+                    CVPixelBufferLockBaseAddress(cvbuf, 0);
+
+                    int src_byte_per_pel = is_10bit ? 2 : 1;
+                    int uv_w = pic.p.w / 2;
+                    int uv_h = pic.p.h / 2;
+
+                    // Copy Y plane.
+                    uint8_t* dst_y  = (uint8_t*)CVPixelBufferGetBaseAddressOfPlane(cvbuf, 0);
+                    size_t   dst_ys = CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 0);
+                    const uint8_t* src_y = (const uint8_t*)pic.data[0];
+                    for (int row = 0; row < pic.p.h; row++)
+                        std::memcpy(dst_y + row * dst_ys,
+                                    src_y + row * pic.stride[0],
+                                    (size_t)pic.p.w * src_byte_per_pel);
+
+                    // Interleave Cb/Cr into UV plane (I420 → NV12, or I010 → P010).
+                    uint8_t* dst_uv  = (uint8_t*)CVPixelBufferGetBaseAddressOfPlane(cvbuf, 1);
+                    size_t   dst_uvs = CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 1);
+                    const uint8_t* src_u = (const uint8_t*)pic.data[1];
+                    const uint8_t* src_v = (const uint8_t*)pic.data[2];
+                    for (int row = 0; row < uv_h; row++) {
+                        uint8_t*       d  = dst_uv + row * dst_uvs;
+                        const uint8_t* su = src_u  + row * pic.stride[1];
+                        const uint8_t* sv = src_v  + row * pic.stride[1];
+                        for (int col = 0; col < uv_w; col++) {
+                            std::memcpy(d + col * 2 * src_byte_per_pel,
+                                        su + col * src_byte_per_pel, src_byte_per_pel);
+                            std::memcpy(d + col * 2 * src_byte_per_pel + src_byte_per_pel,
+                                        sv + col * src_byte_per_pel, src_byte_per_pel);
+                        }
+                    }
+
+                    CVPixelBufferUnlockBaseAddress(cvbuf, 0);
+                    // Transfer ownership of cvbuf to on_decoded (caller releases via CFRelease).
+                    on_decoded(cvbuf);
+                }
+            }
+            dav1d_picture_unref(&pic);
+        }
+    }
 }
 
 // ── VT callback ───────────────────────────────────────────────────────────────

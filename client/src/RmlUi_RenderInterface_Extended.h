@@ -11,34 +11,38 @@ struct RmlRendererSettings {
 };
 } // namespace Backend
 
-// Extended render interface with custom methods shared between DX11 and DX12 backends.
-// Adds YUV/NV12 video texture support, streaming texture updates, and geometry vertex updates
-// beyond what the base Rml::RenderInterface provides.
+// Extended render interface adding YUV/NV12 video texture support, streaming texture updates,
+// and geometry vertex updates beyond what the base Rml::RenderInterface provides.
+// DX11/DX12 backends implement all methods; Metal implements only the NV12/YUV video methods.
 class ExtendedRenderInterface : public Rml::RenderInterface {
 public:
 	virtual ~ExtendedRenderInterface() = default;
 
 	// Returns true if the renderer was successfully constructed.
-	virtual explicit operator bool() const = 0;
+	virtual explicit operator bool() const { return true; }
 
 	// The viewport should be updated whenever the window size changes.
-	virtual void SetViewport(int viewport_width, int viewport_height, bool force = false) = 0;
+	// DX renderers override this; Metal has its own SetViewport(int,int) entry point.
+	virtual void SetViewport(int /*viewport_width*/, int /*viewport_height*/, bool /*force*/ = false) {}
 
 	// Sets up GPU states for taking rendering commands from RmlUi.
-	virtual void BeginFrame() = 0;
+	// DX renderers override; Metal uses BeginFrame(MTLCommandBuffer, MTLRenderPassDescriptor*).
+	virtual void BeginFrame() {}
 
 	// Optional, can be used to clear the active framebuffer.
-	virtual void Clear() = 0;
+	virtual void Clear() {}
 
 	// Presents to screen and synchronizes.
-	virtual void EndFrame() = 0;
+	// DX renderers override; Metal uses its own EndFrame() entry point.
+	virtual void EndFrame() {}
 
 	// Re-map existing VB with new vertex data (no GPU resource allocation).
-	virtual void UpdateGeometryVertices(Rml::CompiledGeometryHandle geometry, Rml::Span<const Rml::Vertex> vertices) = 0;
+	// DX renderers override; Metal does not currently implement this.
+	virtual void UpdateGeometryVertices(Rml::CompiledGeometryHandle /*geometry*/, Rml::Span<const Rml::Vertex> /*vertices*/) {}
 
 	// Updates pixel data of an existing texture in-place (no resource/SRV reallocation).
-	// Dimensions must match the original texture. For streaming video.
-	virtual void UpdateTextureData(Rml::TextureHandle texture_handle, Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) = 0;
+	// DX renderers override; Metal does not currently implement this.
+	virtual void UpdateTextureData(Rml::TextureHandle /*texture_handle*/, Rml::Span<const Rml::byte> /*source_data*/, Rml::Vector2i /*source_dimensions*/) {}
 
 	// YUV texture support (I420: 3 x R8 planes -> RGB in pixel shader)
 	virtual uintptr_t GenerateYUVTexture(

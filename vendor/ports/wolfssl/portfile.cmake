@@ -44,7 +44,10 @@ foreach(config RELEASE DEBUG)
   # Suppress clang-cl errors for upstream wolfSSL code (InetPtonW narrow/wide mismatch)
   string(APPEND VCPKG_COMBINED_C_FLAGS_${config} " -Wno-incompatible-pointer-types")
   # GCC false positive in tls.c Hmac_UpdateFinal_CT inlined into TLS_hmac (stringop-overflow on Hmac stack object)
-  string(APPEND VCPKG_COMBINED_C_FLAGS_${config} " -Wno-error=stringop-overflow")
+  # This is a GCC-only warning flag; clang treats unknown -Wno-error= as a hard error
+  if(VCPKG_DETECTED_CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    string(APPEND VCPKG_COMBINED_C_FLAGS_${config} " -Wno-error=stringop-overflow")
+  endif()
   string(APPEND VCPKG_COMBINED_C_FLAGS_${config} " -DWOLFSSL_CUSTOM_OID -DHAVE_OID_ENCODING -DWOLFSSL_ASN_TEMPLATE")
   # Force PEM-to-DER support and ensure NO_CERTS is not set
   string(APPEND VCPKG_COMBINED_C_FLAGS_${config} " -DWOLFSSL_PEM_TO_DER")
@@ -67,6 +70,10 @@ vcpkg_cmake_configure(
       -DWOLFSSL_CRYPT_TESTS=no
       -DWOLFSSL_OPENSSLALL=yes
       -DWOLFSSL_TLSX=yes
+      # Disable system CA cert integration — we do TOFU pinning, not root-store validation.
+      # This avoids a Security.framework header detection issue on macOS with cmake sysroot.
+      # The correct cmake option name is WOLFSSL_SYS_CA_CERTS (not WOLFSSL_SYSTEM_CA_CERTS).
+      -DWOLFSSL_SYS_CA_CERTS=no
       -DWOLFSSL_ASN=yes
       -DWOLFSSL_KEYGEN=yes
       -DWOLFSSL_CERTGEN=yes

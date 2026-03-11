@@ -1,5 +1,6 @@
 find_package(Opus CONFIG REQUIRED)
 find_package(wolfssl CONFIG REQUIRED)
+
 find_package(msquic CONFIG REQUIRED)
 
 add_library(parties_common STATIC
@@ -8,9 +9,10 @@ add_library(parties_common STATIC
     src/crypto.cpp
     src/codec.cpp
     src/net_common.cpp
-    src/quic_common.cpp
     src/permissions.cpp
 )
+
+target_sources(parties_common PRIVATE src/quic_common.cpp)
 
 target_include_directories(parties_common
     PUBLIC
