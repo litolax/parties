@@ -518,7 +518,7 @@ void App::start_screen_share(int target_index) {
 
         uint32_t fn = core_.video_frame_number_++;
         uint32_t ts = fn;
-        uint8_t  flags = keyframe ? protocol::VIDEO_FLAG_KEYFRAME : 0;
+        uint8_t  flags = keyframe ? VIDEO_FLAG_KEYFRAME : 0;
         uint16_t w = static_cast<uint16_t>(encoder_->width());
         uint16_t h = static_cast<uint16_t>(encoder_->height());
         uint8_t  codec = static_cast<uint8_t>(encoder_->codec());
@@ -681,7 +681,7 @@ void App::on_video_frame_received(uint32_t sender_id, const uint8_t* data, size_
     if (sender_id != core_.viewing_sharer_) return;
 
     uint8_t flags = data[8];
-    bool is_keyframe = (flags & protocol::VIDEO_FLAG_KEYFRAME) != 0;
+    bool is_keyframe = (flags & VIDEO_FLAG_KEYFRAME) != 0;
     uint16_t width, height;
     std::memcpy(&width,  data + 9,  2);
     std::memcpy(&height, data + 11, 2);

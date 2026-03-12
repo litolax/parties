@@ -12,6 +12,8 @@ bool VideoDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 	ZoneScopedN("VideoDecoder::init");
     shutdown();
     codec_ = codec;
+    width_ = width;
+    height_ = height;
 
     if (!hardware_disabled_) {
         // Full chain: NVDEC → AMF → dav1d/MFT

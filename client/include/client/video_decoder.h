@@ -28,6 +28,8 @@ public:
     void flush();
 
     VideoCodecId codec() const { return codec_; }
+    uint32_t width() const { return width_; }
+    uint32_t height() const { return height_; }
 
     // True if the hardware decoder's GPU context was invalidated
     bool context_lost() const;
@@ -44,6 +46,8 @@ public:
 private:
     std::unique_ptr<encdec::Decoder> decoder_;
     VideoCodecId codec_ = VideoCodecId::AV1;
+    uint32_t width_ = 0;
+    uint32_t height_ = 0;
     bool initialized_ = false;
     bool hardware_disabled_ = false;
 };
