@@ -12,7 +12,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 // RmlUi Metal backend
-#import "RmlUi_Backend_macOS_Metal.h"
+#import "../metal/RmlUi_Backend_macOS_Metal.h"
 
 // RmlUi core
 #include <RmlUi/Core/Core.h>
