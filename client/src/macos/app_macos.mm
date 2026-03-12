@@ -381,8 +381,9 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     _doc = _rmlContext->LoadDocument("ui/lobby.rml");
     if (_doc) {
         _doc->Show();
-        if (auto* tb = _doc->GetElementById("titlebar-drag"))
-            tb->SetProperty("display", "none");
+        // Mark document as macOS platform so RCSS hides Win32 controls and
+        // centres the branding, leaving space for native traffic-light buttons.
+        _doc->SetClass("platform-macos", true);
     }
 
     // ── Mouse tracking area ───────────────────────────────────────────────

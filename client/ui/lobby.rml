@@ -7,7 +7,13 @@
 
     <!-- Custom titlebar -->
     <div class="titlebar" id="titlebar-drag">
+        <!-- Windows: logo + name on left -->
         <div class="titlebar-left">
+            <svg class="titlebar-logo" src="logo.svg" width="20" height="20" />
+            <span class="titlebar-title">Parties</span>
+        </div>
+        <!-- macOS: logo + name centred (traffic-light buttons live on the left natively) -->
+        <div class="titlebar-center">
             <svg class="titlebar-logo" src="logo.svg" width="20" height="20" />
             <span class="titlebar-title">Parties</span>
         </div>

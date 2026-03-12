@@ -109,6 +109,30 @@ body {
 #titlebar-maximize { window-action: maximize; }
 #titlebar-close    { window-action: close; }
 
+/* ── macOS titlebar: hide Win32 controls, centre branding ─────────────
+   The body gets class "platform-macos" at runtime on macOS.
+   Native traffic-light buttons occupy ~75dp on the left, so we pad     */
+
+.titlebar-center {
+    display: none;
+}
+
+.platform-macos .titlebar {
+    padding-left: 75dp;
+    justify-content: center;
+    gap: 12dp;
+}
+
+.platform-macos .titlebar-left    { display: none; }
+.platform-macos .titlebar-buttons { display: none; }
+
+.platform-macos .titlebar-center {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8dp;
+}
+
 /* ── Titlebar button icons (CSS-drawn) ───────────── */
 
 .tb-icon-minimize {
