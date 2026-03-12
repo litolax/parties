@@ -25,7 +25,7 @@ struct IDCompositionVisual;
 
 // Required for HANDLE, HWND
 // clang-format off
-#include "RmlUi_Include_Windows.h"
+#include "../windows/RmlUi_Include_Windows.h"
 // clang-format on
 
 #include <wrl/client.h>  // ComPtr

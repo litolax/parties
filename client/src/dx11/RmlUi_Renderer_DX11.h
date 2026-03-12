@@ -28,7 +28,7 @@ struct IDCompositionTarget;
 struct IDCompositionVisual;
 
 // clang-format off
-#include "../dx12/RmlUi_Include_Windows.h"
+#include "../windows/RmlUi_Include_Windows.h"
 // clang-format on
 
 #include <wrl/client.h>

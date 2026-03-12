@@ -27,11 +27,13 @@ set(CLIENT_COMMON_SOURCES
     src/audio_engine.cpp
     src/voice_mixer.cpp
     src/miniaudio_impl.cpp
-    src/rmlui_backend.cpp
+    src/RmlUI_Backend.cpp
     src/video_element.cpp
     src/level_meter_element.cpp
     src/stream_audio_player.cpp
     src/app_core.cpp
+    src/sound_player.cpp
+    src/net_client_msquic.cpp
 )
 
 # ── Platform-specific sources ─────────────────────────────────────────────────
@@ -41,19 +43,15 @@ if(APPLE)
         src/macos/main.mm
         src/macos/app_macos.mm
 
-        # QUIC transport — MsQuic (same backend as Windows/Linux)
-        src/net_client_msquic.cpp
-
         # RmlUI Metal backend (shared with client-ios)
-        ../client-ios/Backends/RmlUi_Renderer_Metal.mm
-        ../client-ios/Backends/RmlUi_Platform_macOS.mm
-        ../client-ios/Backends/RmlUi_Backend_macOS_Metal.mm
-
+        src/metal/RmlUi_Renderer_Metal.mm
+        src/metal/RmlUi_Backend_macOS_Metal.mm
+        src/macos/RmlUi_Platform_macOS.mm
+    
         # Screen capture — ScreenCaptureKit (macOS 12.3+)
         src/macos/screen_capture_macos.mm
 
         # Sound player — pure miniaudio, same as Windows
-        src/sound_player.cpp
     )
     # miniaudio CoreAudio backend requires Objective-C++
     set_source_files_properties(
@@ -63,30 +61,27 @@ if(APPLE)
     )
 else()
     set(CLIENT_PLATFORM_SOURCES
-        src/main.cpp
-        src/app.cpp
-        src/context_menu.cpp
-        src/ui_manager.cpp
-        src/stream_audio_capture.cpp
-        src/sound_player.cpp
-
-        # QUIC transport — MsQuic
-        src/net_client_msquic.cpp
+        # Platform specific
+        src/windows/main.cpp
+        src/windows/app.cpp
+        src/windows/stream_audio_capture.cpp
+        src/windows/RmlUi_Platform_Win32.cpp
+        src/windows/ui_manager.cpp
+        src/windows/context_menu.cpp
 
         # RmlUI rendering backends
         src/dx11/RmlUi_Renderer_DX11.cpp
         src/dx12/RmlUi_Renderer_DX12.cpp
         src/dx12/RmlUi_Renderer_DX12WL.cpp
-        src/dx12/RmlUi_Platform_Win32.cpp
         src/dx12/offsetAllocator.cpp
         src/vulkan/RmlUi_Renderer_VK.cpp
 
         # Screen capture — DXGI
-        src/screen_capture.cpp
+        src/windows/screen_capture.cpp
 
         # Video — Media Foundation / hardware encoders
-        src/video_encoder.cpp
-        src/video_decoder.cpp
+        src/windows/video_encoder.cpp
+        src/windows/video_decoder.cpp
 
         # Windows resource file
         "${CMAKE_CURRENT_BINARY_DIR}/app.rc"

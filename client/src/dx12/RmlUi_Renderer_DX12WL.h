@@ -7,7 +7,7 @@
 #endif
 
 // clang-format off
-#include "RmlUi_Include_Windows.h"
+#include "../windows/RmlUi_Include_Windows.h"
 #include "RmlUi_Include_DirectX_12.h"
 // clang-format on
 
