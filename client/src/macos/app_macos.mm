@@ -716,9 +716,14 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
                                           styleMask:style
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
-    _window.title                 = @"Parties";
-    _window.contentViewController = _viewController;
-    _window.minSize               = NSMakeSize(800, 500);
+    // Hide the native title bar while keeping traffic-light buttons.
+    // The content view extends into the title bar area; our RmlUI titlebar
+    // renders the background and the native buttons float on top of it.
+    _window.titlebarAppearsTransparent = YES;
+    _window.titleVisibility            = NSWindowTitleHidden;
+    _window.styleMask                 |= NSWindowStyleMaskFullSizeContentView;
+    _window.contentViewController      = _viewController;
+    _window.minSize                    = NSMakeSize(800, 500);
 
     [_window center];
     [_window makeKeyAndOrderFront:nil];
