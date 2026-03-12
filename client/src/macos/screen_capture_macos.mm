@@ -90,6 +90,10 @@ struct ScreenCaptureMac::Impl {
     PartiesCaptureOutput* output   = nullptr;
     dispatch_queue_t      queue    = nullptr;
     id                    observer = nil;  // PartiesPickerObserver (macOS 14+)
+
+    // Nested class has implicit access to ScreenCaptureMac private members (C++11).
+    static bool start_with_filter(ScreenCaptureMac* cap, Impl* impl,
+                                  SCContentFilter* filter, uint32_t target_fps);
 };
 
 ScreenCaptureMac::ScreenCaptureMac()
@@ -119,10 +123,10 @@ ScreenCaptureMac::~ScreenCaptureMac()
 
 // ── Helper: start capture with a given filter ────────────────────────────────
 
-static bool StartWithFilter(ScreenCaptureMac* cap,
-                             ScreenCaptureMac::Impl* impl,
-                             SCContentFilter* filter,
-                             uint32_t target_fps)
+bool ScreenCaptureMac::Impl::start_with_filter(ScreenCaptureMac* cap,
+                                                Impl* impl,
+                                                SCContentFilter* filter,
+                                                uint32_t target_fps)
 {
     // Wire callbacks into the delegate.
     impl->output.onFrame = [cap](CVPixelBufferRef buf, uint32_t w, uint32_t h) {
@@ -204,7 +208,7 @@ void ScreenCaptureMac::pick_and_start(uint32_t target_fps,
             cap->impl_->observer = nil;
             picker.active = NO;
 
-            bool ok = StartWithFilter(cap, cap->impl_, filter, target_fps);
+            bool ok = Impl::start_with_filter(cap, cap->impl_, filter, target_fps);
             if (on_started) on_started(ok);
         };
 
@@ -235,7 +239,7 @@ void ScreenCaptureMac::pick_and_start(uint32_t target_fps,
                 SCContentFilter* filter = [[SCContentFilter alloc]
                     initWithDisplay:mainDisplay excludingWindows:@[]];
 
-                bool ok = StartWithFilter(cap, cap->impl_, filter, target_fps);
+                bool ok = Impl::start_with_filter(cap, cap->impl_, filter, target_fps);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     if (on_started) on_started(ok);
                 });
