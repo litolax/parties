@@ -507,6 +507,8 @@ void AppCore::watch_sharer(UserId id)
     viewing_sharer_ = id;
     awaiting_keyframe_ = true;
     send_pli(id);
+    if (bridge_.start_decode_thread)
+        bridge_.start_decode_thread();
     uint32_t id32 = id;
     net_.send_message(protocol::ControlMessageType::SCREEN_SHARE_VIEW,
                       reinterpret_cast<const uint8_t*>(&id32), 4);
@@ -516,6 +518,8 @@ void AppCore::watch_sharer(UserId id)
 
 void AppCore::stop_watching()
 {
+    if (bridge_.stop_decode_thread)
+        bridge_.stop_decode_thread();
     viewing_sharer_ = 0;
     awaiting_keyframe_ = false;
     uint32_t zero = 0;

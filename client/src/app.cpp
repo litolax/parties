@@ -152,6 +152,9 @@ bool App::init(HWND hwnd, int renderer_id) {
         }
     };
 
+    bridge.start_decode_thread = [this]() { start_decode_thread(); };
+    bridge.stop_decode_thread  = [this]() { stop_decode_thread(); };
+
     // Initialize UI
     if (!ui_.init(hwnd, renderer_id)) return false;
 

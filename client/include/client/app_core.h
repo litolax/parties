@@ -31,6 +31,8 @@ struct PlatformBridge {
     std::function<void()>                                      stop_screen_share;
     std::function<void()>                                      request_keyframe;
     std::function<void()>                                      clear_video_element;
+    std::function<void()>                                      start_decode_thread;
+    std::function<void()>                                      stop_decode_thread;
 };
 
 class AppCore {
