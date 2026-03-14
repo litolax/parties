@@ -40,6 +40,7 @@
 #include <client/sound_player.h>
 #include <client/rmlui_backend.h>
 #include <client/video_element.h>
+#include <client/level_meter_element.h>
 #include <client/gradient_circle_element.h>
 
 #include <encdec/apple/VideoDecoderIOS.h>
@@ -226,9 +227,11 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     // Embedded file interface (must outlive RmlUi)
     EmbeddedFileInterface _fileInterface;
 
-    // Video element instancer
+    // Custom element instancers
     VideoElementInstancer _videoInstancer;
+    LevelMeterInstancer   _levelMeterInstancer;
     GradientCircleInstancer _gradientCircleInstancer;
+    LevelMeterElement*    _levelMeter;
 
     // AppCore — all shared connection/audio/model logic
     AppCore _core;
@@ -291,6 +294,7 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     Rml::Initialise();
 
     Rml::Factory::RegisterElementInstancer("video_frame", &_videoInstancer);
+    Rml::Factory::RegisterElementInstancer("level_meter", &_levelMeterInstancer);
     Rml::Factory::RegisterElementInstancer("gradient_circle", &_gradientCircleInstancer);
 
     CGSize physical = _metalView.drawableSize;
@@ -399,6 +403,7 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
         // Mark document as macOS platform so RCSS hides Win32 controls and
         // centres the branding, leaving space for native traffic-light buttons.
         _doc->SetClass("platform-macos", true);
+        _levelMeter = static_cast<LevelMeterElement*>(_doc->GetElementById("voice-level-meter"));
     }
 
     // ── Mouse tracking area ───────────────────────────────────────────────
@@ -429,6 +434,12 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
 {
     // Tick shared logic (network messages, FPS counter, audio levels, etc.)
     _core.tick();
+
+    // Update voice level meter
+    if (_levelMeter && _core.model_.is_connected) {
+        _levelMeter->SetLevel(_core.audio_.voice_level());
+        _levelMeter->SetThreshold(_core.model_.vad_threshold);
+    }
 
     MTLRenderPassDescriptor* pass = view.currentRenderPassDescriptor;
     if (!pass) return;
@@ -637,6 +648,9 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
                 // are updated by SCREEN_SHARE_UPDATE once the encoder produces real dims.
                 uint8_t payload[5] = {};
                 bself->_core.net_.send_message(ControlMessageType::SCREEN_SHARE_START, payload, sizeof(payload));
+
+                // Auto-watch self for local preview
+                [bself watchSharer:bself->_core.user_id_];
             });
         }
 

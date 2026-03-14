@@ -21,10 +21,7 @@ if(NOT APPLE)
 endif()
 
 # ── Cross-platform sources ────────────────────────────────────────────────────
-# Windows-only files (HWND / WRL / Win32 / DX renderers):
-#   app.cpp, context_menu.cpp, ui_manager.cpp
-# Those live in CLIENT_PLATFORM_SOURCES on Windows.
-# On macOS app_macos.mm replaces app.cpp + ui_manager.cpp.
+# Platform-specific files live in CLIENT_PLATFORM_SOURCES below.
 set(CLIENT_COMMON_SOURCES
     src/lobby_model.cpp
     src/server_list_model.cpp
@@ -43,17 +40,35 @@ set(CLIENT_COMMON_SOURCES
 )
 
 # ── Platform-specific sources ─────────────────────────────────────────────────
-if(APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(CLIENT_PLATFORM_SOURCES
+        # Entry point & app (UIKit / Metal)
+        src/ios/main.mm
+        src/ios/AppDelegate.mm
+        src/ios/app_ios.mm
+
+        # RmlUI Metal backend (renderer shared with macOS)
+        src/metal/RmlUi_Renderer_Metal.mm
+        src/ios/RmlUi_Backend_iOS_Metal.mm
+        src/ios/RmlUi_Platform_iOS.mm
+    )
+    # miniaudio CoreAudio backend requires Objective-C++
+    set_source_files_properties(
+        src/audio_engine.cpp
+        src/miniaudio_impl.cpp
+        PROPERTIES LANGUAGE OBJCXX
+    )
+elseif(APPLE)
     set(CLIENT_PLATFORM_SOURCES
         # Entry point & window (AppKit / Metal)
         src/macos/main.mm
         src/macos/app_macos.mm
 
-        # RmlUI Metal backend (shared with client-ios)
+        # RmlUI Metal backend (shared with iOS)
         src/metal/RmlUi_Renderer_Metal.mm
         src/metal/RmlUi_Backend_macOS_Metal.mm
         src/macos/RmlUi_Platform_macOS.mm
-    
+
         # Screen capture — ScreenCaptureKit (macOS 12.3+)
         src/macos/screen_capture_macos.mm
 
@@ -94,10 +109,48 @@ else()
     )
 endif()
 
-add_executable(parties_client
-    ${CLIENT_COMMON_SOURCES}
-    ${CLIENT_PLATFORM_SOURCES}
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # ── iOS bundle resources ──────────────────────────────────────────────
+    set(IOS_ASSET_CATALOG "${CMAKE_CURRENT_SOURCE_DIR}/src/ios/Assets.xcassets")
+    set(IOS_PRIVACY_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/src/ios/PrivacyInfo.xcprivacy")
+
+    add_executable(parties_client MACOSX_BUNDLE
+        ${CLIENT_COMMON_SOURCES}
+        ${CLIENT_PLATFORM_SOURCES}
+        ${IOS_ASSET_CATALOG}
+        ${IOS_PRIVACY_MANIFEST}
+    )
+
+    set_source_files_properties(${IOS_ASSET_CATALOG} PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources)
+    set_source_files_properties(${IOS_PRIVACY_MANIFEST} PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources)
+
+    set_target_properties(parties_client PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER      "com.parties.ios"
+        MACOSX_BUNDLE_BUNDLE_VERSION      "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
+        MACOSX_BUNDLE_INFO_PLIST          "${CMAKE_CURRENT_SOURCE_DIR}/src/ios/Info.plist"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.parties.ios"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY    "1"    # iPhone only
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "16.0"
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY         "Apple Development"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE            "Automatic"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM           "${APPLE_DEVELOPMENT_TEAM}"
+        XCODE_ATTRIBUTE_ENABLE_BITCODE             "NO"
+        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS     "${CMAKE_CURRENT_SOURCE_DIR}/src/ios/Parties.entitlements"
+        XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE    "NO"
+        # Archive must be "iOS App Archive" (not Generic) for TestFlight
+        XCODE_ATTRIBUTE_SKIP_INSTALL               "NO"
+        XCODE_ATTRIBUTE_INSTALL_PATH               "$(LOCAL_APPS_DIR)"
+    )
+else()
+    add_executable(parties_client
+        ${CLIENT_COMMON_SOURCES}
+        ${CLIENT_PLATFORM_SOURCES}
+    )
+endif()
 
 # Disable CMake's auto-generated manifest — we embed our own via app.rc
 if(NOT APPLE)
@@ -125,12 +178,12 @@ target_include_directories(parties_client
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        $<$<BOOL:${APPLE}>:${CMAKE_CURRENT_SOURCE_DIR}/src/macos>
+        $<$<STREQUAL:${CMAKE_SYSTEM_NAME},iOS>:${CMAKE_CURRENT_SOURCE_DIR}/src/ios>
+        $<$<AND:$<BOOL:${APPLE}>,$<NOT:$<STREQUAL:${CMAKE_SYSTEM_NAME},iOS>>>:${CMAKE_CURRENT_SOURCE_DIR}/src/macos>
         ${MINIAUDIO_INCLUDE_DIRS}
         $<$<NOT:$<BOOL:${APPLE}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/dx12>
         $<$<NOT:$<BOOL:${APPLE}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/vulkan>
         ${SPEEXDSP_INCLUDE_DIRS}
-        $<$<BOOL:${APPLE}>:${CMAKE_CURRENT_SOURCE_DIR}/../client-ios/Backends>
 )
 
 # Retail: no console window on Windows
@@ -150,7 +203,29 @@ if(APPLE)
     )
 endif()
 
-if(APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_link_libraries(parties_client
+        PRIVATE
+            parties_common
+            parties_encdec
+            rnnoise::rnnoise
+            unofficial::sqlite3::sqlite3
+            RmlUi::RmlUi
+            RmlUi::Debugger
+            ${SPEEXDSP_LIBRARY}
+            "-framework Metal"
+            "-framework MetalKit"
+            "-framework UIKit"
+            "-framework Foundation"
+            "-framework QuartzCore"
+            "-framework CoreGraphics"
+            "-framework CoreText"
+            "-framework AVFoundation"
+            "-framework AudioToolbox"
+            "-framework CoreAudio"
+            "-framework Security"
+    )
+elseif(APPLE)
     target_link_libraries(parties_client
         PRIVATE
             parties_common
@@ -205,4 +280,3 @@ if(NOT APPLE)
         )
     endforeach()
 endif()
-

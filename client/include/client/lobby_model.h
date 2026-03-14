@@ -101,6 +101,9 @@ public:
     Rml::String deafen_key_name;
     bool deafen_binding = false;
 
+    // Mobile navigation (iOS: sidebar vs content panel)
+    bool mobile_show_content = false;
+
     // Screen sharing
     bool is_sharing = false;
     bool someone_sharing = false;           // convenience: !sharers.empty()

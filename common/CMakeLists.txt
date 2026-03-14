@@ -13,6 +13,7 @@ add_library(parties_common STATIC
     src/log.cpp
     src/crash_reporter.cpp
 )
+set_target_properties(parties_common PROPERTIES XCODE_ATTRIBUTE_SKIP_INSTALL "YES")
 
 target_sources(parties_common PRIVATE src/quic_common.cpp)
 
