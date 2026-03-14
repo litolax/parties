@@ -167,6 +167,7 @@ public:
     std::function<void(int)>   on_select_share_target;
     std::function<void()>      on_cancel_share;
     std::function<void()>      on_start_native_share;  // macOS: trigger native picker
+    std::function<void(float)> on_share_bitrate_changed;
     std::function<void(int)>   on_watch_sharer;
     std::function<void(int)>   on_select_sharer;
     std::function<void()>      on_stop_watching;

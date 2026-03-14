@@ -181,6 +181,16 @@ bool App::init(HWND hwnd, int renderer_id) {
         capture_targets_.clear();
     };
 
+    core_.model_.on_share_bitrate_changed = [this](float mbps) {
+        core_.settings_.set_pref("video.share_bitrate", std::to_string(mbps));
+        if (encoder_) {
+            uint32_t bps = static_cast<uint32_t>(mbps * 1'000'000.0f);
+            bps = (std::max)(bps, VIDEO_MIN_BITRATE);
+            bps = (std::min)(bps, VIDEO_MAX_BITRATE);
+            encoder_->set_bitrate(bps);
+        }
+    };
+
     // Load identity
     if (core_.settings_.has_identity()) {
         auto id = core_.settings_.load_identity();
@@ -609,7 +619,13 @@ void App::start_screen_share(int target_index) {
 
         {
             ZoneScopedN("capture::CopyResource");
-            capture_->context()->CopyResource(encode_textures_[ws].Get(), texture);
+            // Use CopySubresourceRegion: source texture may have odd dimensions
+            // while encode texture is even-rounded. CopyResource silently fails
+            // when dimensions don't match.
+            D3D11_BOX src_box = { 0, 0, 0, desc.Width, desc.Height, 1 };
+            capture_->context()->CopySubresourceRegion(
+                encode_textures_[ws].Get(), 0, 0, 0, 0,
+                texture, 0, &src_box);
             capture_->context()->Flush();
         }
 

@@ -276,7 +276,7 @@ bool LobbyModel::init(Rml::Context* context) {
 
     ctor.BindEventCallback("share_bitrate_changed",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
-            // share_bitrate already updated by data binding
+            if (on_share_bitrate_changed) on_share_bitrate_changed(share_bitrate);
         });
 
     ctor.BindEventCallback("watch_sharer",
