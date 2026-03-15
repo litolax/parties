@@ -35,7 +35,7 @@ jobs:
 
       - name: Install LLVM 20
         run: |
-          choco install llvm --version=22.1.1 -y
+          choco install llvm --version=22.1.0 -y
           echo "LLVMInstallDir=C:\Program Files\LLVM" >> $env:GITHUB_ENV
           echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
