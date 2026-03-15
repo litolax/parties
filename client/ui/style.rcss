@@ -1320,16 +1320,23 @@ input.range slidertrack {
     border-radius: 2dp;
 }
 
+input.range sliderprogress {
+    height: 4dp;
+    background-color: #6EECD4;
+    border-radius: 2dp;
+    padding-right: 1dp;
+}
+
 input.range sliderbar {
     width: 14dp;
     height: 14dp;
-    background-color: #6EECD4;
+    background-color: #FFFFFF;
     border-radius: 7dp;
     margin-top: -5dp;
 }
 
 input.range sliderbar:hover {
-    background-color: #8CF4E2;
+    background-color: #E0E0E0;
     width: 16dp;
     height: 16dp;
     border-radius: 8dp;
@@ -1337,7 +1344,7 @@ input.range sliderbar:hover {
 }
 
 input.range sliderbar:active {
-    background-color: #5DD4BC;
+    background-color: #CCCCCC;
 }
 
 input.range sliderarrowdec,
