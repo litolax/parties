@@ -117,7 +117,7 @@ jobs:
             autoconf automake libtool
 
       - name: Configure
-        run: cmake --preset linux-release
+        run: cmake --preset linux-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
       - name: Build
         run: cmake --build --preset linux-release

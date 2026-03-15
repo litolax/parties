@@ -196,8 +196,14 @@ if(APPLE)
         set_target_properties(parties_client PROPERTIES
             MACOSX_BUNDLE_GUI_IDENTIFIER "org.parties.client"
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/res/Info.plist.in"
+            MACOSX_BUNDLE_ICON_FILE "AppIcon"
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.parties.client"
         )
+        # Copy .icns into the app bundle Resources folder
+        set(MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/res/AppIcon.icns")
+        set_source_files_properties(${MACOS_ICON} PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources)
+        target_sources(parties_client PRIVATE ${MACOS_ICON})
     endif()
 endif()
 

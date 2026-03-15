@@ -352,6 +352,11 @@ bool LobbyModel::init(Rml::Context* context) {
             dirty("stream_fullscreen");
         });
 
+    ctor.BindEventCallback("stream_tap_fullscreen",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_stream_tap_fullscreen) on_stream_tap_fullscreen();
+        });
+
     // Admin event callbacks
     ctor.BindEventCallback("show_create_channel_form",
         [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {

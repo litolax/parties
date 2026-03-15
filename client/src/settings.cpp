@@ -127,6 +127,10 @@ bool Settings::save_identity(const std::string& seed_phrase,
     return ok;
 }
 
+void Settings::delete_identity() {
+    exec("DELETE FROM identity WHERE id = 1");
+}
+
 std::optional<Identity> Settings::load_identity() {
     sqlite3_stmt* stmt = nullptr;
     const char* sql = "SELECT seed_phrase, public_key, secret_key FROM identity WHERE id = 1";

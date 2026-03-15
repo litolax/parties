@@ -48,6 +48,11 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_link_options($<$<CONFIG:Release>:/DEBUG:FULL>)
 endif()
 
+# Generate dSYM bundles for Xcode archives (required for App Store symbol upload)
+if(APPLE)
+    set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
+endif()
+
 add_subdirectory(common)
 if(BUILD_CLIENT)
     add_subdirectory(encdec)

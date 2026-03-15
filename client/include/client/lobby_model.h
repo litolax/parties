@@ -186,6 +186,7 @@ public:
     std::function<void(int)>   on_select_sharer;
     std::function<void()>      on_stop_watching;
     std::function<void(float)> on_stream_volume_changed;
+    std::function<void()>      on_stream_tap_fullscreen;  // iOS: single tap toggles fullscreen
 
     // Identity
     std::function<void()>      on_show_seed_phrase;

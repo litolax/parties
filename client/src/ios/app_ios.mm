@@ -124,6 +124,10 @@ using namespace parties::protocol;
 
     // Video decoder (receive screen shares)
     std::unique_ptr<VideoDecoderIOS> _decoder;
+    bool                    _streamRevealed;
+    uint32_t                _streamWidth;
+    uint32_t                _streamHeight;
+    bool                    _streamFullscreen;
 }
 
 // ── View setup ───────────────────────────────────────────────────────────────
@@ -134,7 +138,7 @@ using namespace parties::protocol;
     _view = [[MTKView alloc] initWithFrame:UIScreen.mainScreen.bounds device:device];
     _view.colorPixelFormat        = MTLPixelFormatBGRA8Unorm;
     _view.depthStencilPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-    _view.clearColor              = MTLClearColorMake(0.05, 0.05, 0.08, 1.0);
+    _view.clearColor              = MTLClearColorMake(0.059, 0.067, 0.090, 1.0); // #0F1117
     _view.clearStencil            = 0;
     _view.delegate                = self;
     _view.preferredFramesPerSecond = 60;
@@ -265,18 +269,10 @@ using namespace parties::protocol;
         if (el) el->Clear();
     };
 
-    bridge.start_decode_thread = [bself]() {
-        bself->_decoder = std::make_unique<VideoDecoderIOS>();
-    };
-
-    bridge.stop_decode_thread = [bself]() {
-        if (bself->_decoder) {
-            bself->_decoder->on_decoded = nullptr;
-            bself->_decoder->flush();
-            bself->_decoder->shutdown();
-            bself->_decoder.reset();
-        }
-    };
+    // iOS manages the decoder directly in watchSharer:/stopWatching:
+    // (same pattern as macOS) — no start/stop_decode_thread needed.
+    bridge.start_decode_thread = nullptr;
+    bridge.stop_decode_thread  = nullptr;
 
     // ── Init QUIC ─────────────────────────────────────────────────────────
     if (!parties::quic_init()) {
@@ -340,6 +336,11 @@ using namespace parties::protocol;
     _core.model_.on_stop_watching = [bself]() {
         [bself stopWatching];
     };
+
+    // iOS: single tap toggles fullscreen + landscape rotation
+    _core.model_.on_stream_tap_fullscreen = [bself]() {
+        [bself toggleStreamFullscreen];
+    };
 }
 
 // ── Video frame routing (VideoToolbox decoder) ───────────────────────────────
@@ -382,6 +383,11 @@ using namespace parties::protocol;
 
 - (void)onVideoDecoded:(CVPixelBufferRef)buf
 {
+    // Reveal video area on first frame (deferred from watch_sharer)
+    if (!_streamRevealed) {
+        _streamRevealed = true;
+        _core.model_.dirty("viewing_sharer_id");
+    }
     _core.stream_frame_count_.fetch_add(1, std::memory_order_relaxed);
 
     if (!_doc) return;
@@ -392,6 +398,8 @@ using namespace parties::protocol;
 
     uint32_t w = (uint32_t)CVPixelBufferGetWidth(buf);
     uint32_t h = (uint32_t)CVPixelBufferGetHeight(buf);
+    _streamWidth  = w;
+    _streamHeight = h;
 
     const uint8_t* y_plane  = (const uint8_t*)CVPixelBufferGetBaseAddressOfPlane(buf, 0);
     const uint8_t* uv_plane = (const uint8_t*)CVPixelBufferGetBaseAddressOfPlane(buf, 1);
@@ -405,40 +413,126 @@ using namespace parties::protocol;
 
 - (void)watchSharer:(UserId)uid
 {
-    _core.watch_sharer(uid);
-    if (!_decoder)
-        _decoder = std::make_unique<VideoDecoderIOS>();
+    _core.viewing_sharer_   = uid;
+    _core.awaiting_keyframe_ = true;
+    _decoder = std::make_unique<VideoDecoderIOS>();
+    // on_decoded is wired lazily in onVideoFrameData on first frame
+
+    _core.send_pli(uid);
+
+    uint32_t id32 = static_cast<uint32_t>(uid);
+    _core.net_.send_message(ControlMessageType::SCREEN_SHARE_VIEW,
+                            (const uint8_t*)&id32, sizeof(id32));
+
+    _core.model_.viewing_sharer_id = static_cast<int>(uid);
+    _streamRevealed = false;
+    // Don't dirty yet — onVideoDecoded dirties on first frame to avoid black flash
+}
+
+- (void)toggleStreamFullscreen
+{
+    _streamFullscreen = !_streamFullscreen;
+    _core.model_.stream_fullscreen = _streamFullscreen;
+    _core.model_.dirty("stream_fullscreen");
+
+    if (_streamFullscreen && _streamWidth > _streamHeight) {
+        // Landscape video → rotate to landscape
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        auto scene = self.view.window.windowScene;
+        if (scene) {
+            auto prefs = [[UIWindowSceneGeometryPreferencesIOS alloc]
+                initWithInterfaceOrientations:UIInterfaceOrientationMaskLandscapeRight];
+            [scene requestGeometryUpdateWithPreferences:prefs
+                errorHandler:^(NSError* error) {
+                    NSLog(@"[Parties] Orientation change failed: %@", error);
+                }];
+        }
+    } else if (!_streamFullscreen) {
+        // Exit fullscreen → back to portrait
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        auto scene = self.view.window.windowScene;
+        if (scene) {
+            auto prefs = [[UIWindowSceneGeometryPreferencesIOS alloc]
+                initWithInterfaceOrientations:UIInterfaceOrientationMaskPortrait];
+            [scene requestGeometryUpdateWithPreferences:prefs
+                errorHandler:^(NSError* error) {
+                    NSLog(@"[Parties] Orientation change failed: %@", error);
+                }];
+        }
+    }
 }
 
 - (void)stopWatching
 {
-    _core.stop_watching();
-    if (_decoder) {
-        _decoder->on_decoded = nullptr;
-        _decoder->flush();
-        _decoder->shutdown();
-        _decoder.reset();
+    // Exit fullscreen if active
+    if (_streamFullscreen) {
+        _streamFullscreen = false;
+        _core.model_.stream_fullscreen = false;
+        _core.model_.dirty("stream_fullscreen");
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        auto scene = self.view.window.windowScene;
+        if (scene) {
+            auto prefs = [[UIWindowSceneGeometryPreferencesIOS alloc]
+                initWithInterfaceOrientations:UIInterfaceOrientationMaskPortrait];
+            [scene requestGeometryUpdateWithPreferences:prefs
+                errorHandler:^(NSError* error) {}];
+        }
+    }
+
+    _core.viewing_sharer_   = 0;
+    _decoder.reset();
+    _core.awaiting_keyframe_ = false;
+    _streamRevealed = false;
+    _streamWidth = _streamHeight = 0;
+
+    uint32_t zero = 0;
+    _core.net_.send_message(ControlMessageType::SCREEN_SHARE_VIEW,
+                            (const uint8_t*)&zero, sizeof(zero));
+
+    _core.model_.viewing_sharer_id = 0;
+    _core.model_.dirty("viewing_sharer_id");
+
+    if (_doc) {
+        auto* el = dynamic_cast<VideoElement*>(_doc->GetElementById("screen-share"));
+        if (el) el->Clear();
     }
 }
 
-// ── Safe area ────────────────────────────────────────────────────────────────
+// ── Layout / orientation ──────────────────────────────────────────────────────
 
-- (void)viewSafeAreaInsetsDidChange
+- (void)updateViewportSize
 {
-    [super viewSafeAreaInsetsDidChange];
     _safeInsets = self.view.safeAreaInsets;
-
     _viewportTopPx = (int)(_safeInsets.top * _dpRatio);
     Backend::SetViewportTopOffset(_viewportTopPx);
 
-    CGSize native = UIScreen.mainScreen.nativeBounds.size;
-    int physW = (int)native.width;
-    int physH = (int)native.height - _viewportTopPx;
+    // Use view bounds (respects current orientation) instead of
+    // nativeBounds (always portrait).
+    CGSize pts = self.view.bounds.size;
+    int physW = (int)(pts.width  * _dpRatio);
+    int physH = (int)(pts.height * _dpRatio) - _viewportTopPx;
     Backend::SetViewport(physW, physH);
     if (_rmlContext)
         _rmlContext->SetDimensions(Rml::Vector2i(physW, physH));
 
     [self applySafeAreaToDocument];
+}
+
+- (void)viewSafeAreaInsetsDidChange
+{
+    [super viewSafeAreaInsetsDidChange];
+    [self updateViewportSize];
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
+{
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    PartiesViewController* bself = self;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext>) {
+        [bself updateViewportSize];
+        bself->_view.frame = bself.view.bounds;
+    } completion:nil];
 }
 
 - (void)applySafeAreaToDocument
@@ -495,6 +589,8 @@ using namespace parties::protocol;
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations
 {
+    if (_streamFullscreen && _streamWidth > _streamHeight)
+        return UIInterfaceOrientationMaskLandscapeRight | UIInterfaceOrientationMaskLandscapeLeft;
     return UIInterfaceOrientationMaskPortrait;
 }
 

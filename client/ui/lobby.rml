@@ -510,7 +510,8 @@
                     </div>
                 </div>
                 <video_frame id="screen-share"
-                             data-event-dblclick="toggle_stream_fullscreen" />
+                             data-event-dblclick="toggle_stream_fullscreen"
+                             data-event-click="stream_tap_fullscreen" />
             </div>
 
             <div class="text-placeholder" data-if="current_channel > 0 && someone_sharing == false">

@@ -205,6 +205,25 @@ body {
     margin-top: -3dp;
 }
 
+/* Move user island up to avoid iPhone home indicator */
+.platform-ios .user-island {
+    margin-bottom: 50dp;
+}
+
+/* Larger voice buttons on iOS for better touch targets */
+.platform-ios .voice-btn {
+    height: 48dp;
+}
+
+/* Larger settings button on iOS */
+.platform-ios .settings-btn {
+    padding: 8dp;
+}
+.platform-ios .settings-btn svg {
+    width: 32dp;
+    height: 32dp;
+}
+
 /* ── Titlebar button icons (CSS-drawn) ───────────── */
 
 .tb-icon-minimize {
@@ -1460,6 +1479,11 @@ scrollbarvertical sliderarrowinc {
     background-color: #0B0D14d0;
     align-items: center;
     justify-content: center;
+}
+
+.platform-macos .modal-backdrop,
+.platform-ios .modal-backdrop {
+    top: 0dp;
 }
 
 .modal-box {

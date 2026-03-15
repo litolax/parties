@@ -37,6 +37,7 @@ public:
     bool has_identity();
     bool save_identity(const std::string& seed_phrase,
                        const SecretKey& sk, const PublicKey& pk);
+    void delete_identity();
     std::optional<Identity> load_identity();
     std::string get_fingerprint();
 

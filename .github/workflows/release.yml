@@ -117,11 +117,18 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
+      - name: Prepare app bundle for distribution
+        run: |
+          # Remove dSYM from inside the app bundle (already uploaded to Sentry)
+          rm -rf build-macos-release/client/parties_client.app/Contents/MacOS/*.dSYM
+          # Rename to Parties.app for a proper macOS app experience
+          mv build-macos-release/client/parties_client.app build-macos-release/client/Parties.app
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
-          path: build-macos-release/client/parties_client.app
+          path: build-macos-release/client/Parties.app
 
   # ── Linux Docker image ─────────────────────────────────────────────────────
   linux-docker:
@@ -202,7 +209,7 @@ jobs:
         run: |
           cd dist/windows-client && zip -r ../../parties-client-windows-${{ github.ref_name }}.zip . && cd ../..
           cd dist/windows-server && zip -r ../../parties-server-windows-${{ github.ref_name }}.zip . && cd ../..
-          cd dist/macos-client && zip -r ../../parties-client-macos-${{ github.ref_name }}.zip . && cd ../..
+          cd dist/macos-client && zip -ry ../../parties-client-macos-${{ github.ref_name }}.zip Parties.app && cd ../..
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
