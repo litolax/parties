@@ -1748,8 +1748,20 @@ video_frame {
 .stream-volume-slider {
     display: block;
     flex: none;
-    align-self: center;
     width: 100dp;
+    height: 16dp;
+}
+
+input.stream-volume-slider slidertrack {
+    margin-top: 6dp;
+}
+
+input.stream-volume-slider sliderbar {
+    margin-top: -1dp;
+}
+
+input.stream-volume-slider sliderbar:hover {
+    margin-top: -2dp;
 }
 
 .stream-fps {
