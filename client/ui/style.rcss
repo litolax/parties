@@ -1757,11 +1757,11 @@ input.stream-volume-slider slidertrack {
 }
 
 input.stream-volume-slider sliderbar {
-    margin-top: -1dp;
+    margin-top: 0dp;
 }
 
 input.stream-volume-slider sliderbar:hover {
-    margin-top: -2dp;
+    margin-top: -1dp;
 }
 
 .stream-fps {
