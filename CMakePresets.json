@@ -50,7 +50,7 @@
         "VCPKG_TARGET_TRIPLET": "arm64-osx-debug",
         "VCPKG_MANIFEST_FEATURES": "client-macos",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         "ENABLE_TRACY": "OFF",
         "CMAKE_MAKE_PROGRAM": "/opt/homebrew/bin/ninja"
       }
@@ -68,7 +68,7 @@
         "VCPKG_TARGET_TRIPLET": "arm64-osx-release",
         "VCPKG_MANIFEST_FEATURES": "client-macos",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         "ENABLE_TRACY": "OFF",
         "CMAKE_MAKE_PROGRAM": "/opt/homebrew/bin/ninja"
       }
