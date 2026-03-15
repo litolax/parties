@@ -2,7 +2,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <cstdio>
+#include <parties/log.h>
 
 namespace parties::encdec::amd {
 
@@ -25,7 +25,7 @@ bool load_amf(amf::AMFFactory*& factory) {
 
     AMF_RESULT res = init_fn(AMF_FULL_VERSION, &cached_factory);
     if (res != AMF_OK || !cached_factory) {
-        std::fprintf(stderr, "[AMF] AMFInit failed: %d\n", res);
+        LOG_ERROR("AMFInit failed: {}", (int)res);
         return false;
     }
 

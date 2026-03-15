@@ -11,7 +11,7 @@
 #include "openh264/openh264_decoder.h"
 #include "libhevc/libhevc_decoder.h"
 
-#include <cstdio>
+#include <parties/log.h>
 
 namespace parties::encdec {
 
@@ -55,7 +55,7 @@ std::unique_ptr<Encoder> create_encoder(
             return enc;
     }
 
-    std::fprintf(stderr, "[encdec] No encoder available\n");
+    LOG_ERROR("No encoder available");
     return nullptr;
 }
 
@@ -115,8 +115,7 @@ std::unique_ptr<Decoder> create_software_decoder(
         }
     }
 
-    std::fprintf(stderr, "[encdec] No decoder available for %s\n",
-                 codec_name(codec));
+    LOG_ERROR("No decoder available for {}", codec_name(codec));
     return nullptr;
 }
 

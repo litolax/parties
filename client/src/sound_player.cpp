@@ -1,8 +1,9 @@
 #include <client/sound_player.h>
 
+#include <parties/log.h>
+
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 
 namespace parties::client {
@@ -95,19 +96,19 @@ bool SoundPlayer::init() {
     config.periodSizeInMilliseconds = 10;
 
     if (ma_device_init(nullptr, &config, &device_) != MA_SUCCESS) {
-        std::fprintf(stderr, "[SoundPlayer] Failed to init playback device\n");
+        LOG_ERROR("Failed to init playback device");
         return false;
     }
     device_initialized_ = true;
 
-    std::printf("[SoundPlayer] Device: %s\n", device_.playback.name);
-    std::printf("[SoundPlayer]   Requested: %d Hz, native: %d Hz, channels: %d\n",
-                kSampleRate,
-                device_.playback.internalSampleRate,
-                device_.playback.internalChannels);
+    LOG_INFO("SoundPlayer device: {}", device_.playback.name);
+    LOG_INFO("SoundPlayer requested: {} Hz, native: {} Hz, channels: {}",
+             kSampleRate,
+             device_.playback.internalSampleRate,
+             device_.playback.internalChannels);
 
     if (ma_device_start(&device_) != MA_SUCCESS) {
-        std::fprintf(stderr, "[SoundPlayer] Failed to start playback device\n");
+        LOG_ERROR("Failed to start playback device");
         ma_device_uninit(&device_);
         device_initialized_ = false;
         return false;

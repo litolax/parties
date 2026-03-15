@@ -5,6 +5,11 @@
     "msquic",
     "openssl",
     "opus",
+    "sentry-native",
+    {
+      "name": "spdlog",
+      "default-features": false
+    },
     "sqlite3",
     "toml11",
     {

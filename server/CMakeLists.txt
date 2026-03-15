@@ -26,3 +26,7 @@ target_link_libraries(parties_server
 if(WIN32)
     target_link_libraries(parties_server PRIVATE ncrypt.lib)
 endif()
+
+if(ENABLE_SENTRY AND NOT SENTRY_DSN_SERVER STREQUAL "")
+    target_compile_definitions(parties_server PRIVATE "SENTRY_DSN_VALUE=\"${SENTRY_DSN_SERVER}\"")
+endif()

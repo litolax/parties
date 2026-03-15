@@ -5,11 +5,11 @@
 #include <libhevc/ivd.h>
 #include <libhevc/ihevcd_cxa.h>
 
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <thread>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 namespace parties::encdec::libhevc {
@@ -74,8 +74,8 @@ bool LibhevcDecoder::init(VideoCodecId codec, uint32_t /*width*/, uint32_t /*hei
         nullptr, &create_ip, &create_op);
 
     if (status != IV_SUCCESS || !create_op.s_ivd_create_op_t.pv_handle) {
-        std::fprintf(stderr, "[libhevc] Create failed: 0x%08x\n",
-                     create_op.s_ivd_create_op_t.u4_error_code);
+        LOG_ERROR("Create failed: {:#010x}",
+                  create_op.s_ivd_create_op_t.u4_error_code);
         return false;
     }
 
@@ -89,7 +89,7 @@ bool LibhevcDecoder::init(VideoCodecId codec, uint32_t /*width*/, uint32_t /*hei
     // Start in frame decode mode
     set_decode_mode(IVD_DECODE_FRAME);
 
-    std::fprintf(stderr, "[libhevc] H.265 software decoder initialized\n");
+    LOG_INFO("H.265 software decoder initialized");
     return true;
 }
 

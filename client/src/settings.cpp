@@ -1,8 +1,9 @@
 #include <client/settings.h>
 #include <parties/crypto.h>
 
+#include <parties/log.h>
+
 #include <sqlite3.h>
-#include <cstdio>
 #include <cstring>
 
 namespace parties::client {
@@ -15,8 +16,7 @@ Settings::~Settings() {
 
 bool Settings::open(const std::string& path) {
     if (sqlite3_open(path.c_str(), &db_) != SQLITE_OK) {
-        std::fprintf(stderr, "[Settings] Failed to open %s: %s\n",
-                     path.c_str(), sqlite3_errmsg(db_));
+        LOG_ERROR("Failed to open {}: {}", path, sqlite3_errmsg(db_));
         return false;
     }
 
@@ -41,7 +41,7 @@ void Settings::close() {
 bool Settings::exec(const std::string& sql) {
     char* err = nullptr;
     if (sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, &err) != SQLITE_OK) {
-        std::fprintf(stderr, "[Settings] SQL error: %s\n", err);
+        LOG_ERROR("SQL error: {}", err);
         sqlite3_free(err);
         return false;
     }

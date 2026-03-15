@@ -13,6 +13,7 @@
 #include <parties/crypto.h>
 #include <parties/permissions.h>
 #include <parties/profiler.h>
+#include <parties/log.h>
 
 #include <RmlUi/Core/Factory.h>
 
@@ -22,7 +23,6 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -198,8 +198,8 @@ bool App::init(HWND hwnd, int renderer_id) {
             core_.secret_key_  = id->secret_key;
             core_.public_key_  = id->public_key;
             core_.has_identity_ = true;
-            std::printf("[App] Identity loaded: %s\n",
-                        parties::public_key_fingerprint(core_.public_key_).c_str());
+            LOG_INFO("Identity loaded: {}",
+                        parties::public_key_fingerprint(core_.public_key_));
         }
     }
 
@@ -355,7 +355,7 @@ void App::update() {
 
     // Check if captured window was closed
     if (capture_lost_.exchange(false, std::memory_order_relaxed)) {
-        std::fprintf(stderr, "[App] Capture target lost, stopping screen share\n");
+        LOG_WARN("Capture target lost, stopping screen share");
         stop_screen_share();
     }
 
@@ -457,7 +457,7 @@ void App::show_share_picker() {
 
     capture_ = std::make_unique<ScreenCapture>();
     if (!capture_->init()) {
-        std::fprintf(stderr, "[App] Screen capture init failed\n");
+        LOG_ERROR("Screen capture init failed");
         capture_.reset();
         return;
     }
@@ -508,7 +508,7 @@ void App::start_screen_share(int target_index) {
     encode_fps_ = fps_presets[fps_idx];
 
     if (!capture_->start(target, encode_fps_)) {
-        std::fprintf(stderr, "[App] Failed to start capture\n");
+        LOG_ERROR("Failed to start capture");
         capture_->shutdown(); capture_.reset(); capture_targets_.clear();
         return;
     }
@@ -540,7 +540,7 @@ void App::start_screen_share(int target_index) {
         uint8_t  flags = keyframe ? VIDEO_FLAG_KEYFRAME : 0;
 
         if (keyframe)
-            std::fprintf(stderr, "[Encode] keyframe fn=%u size=%zu\n", fn, len);
+            LOG_INFO("keyframe fn={} size={}", fn, len);
         uint16_t w = static_cast<uint16_t>(encoder_->width());
         uint16_t h = static_cast<uint16_t>(encoder_->height());
         uint8_t  codec = static_cast<uint8_t>(encoder_->codec());
@@ -610,7 +610,7 @@ void App::start_screen_share(int target_index) {
             for (int i = 0; i < ENCODE_SLOTS; i++) {
                 encode_textures_[i].Reset();
                 HRESULT hr = capture_->device()->CreateTexture2D(&sd, nullptr, &encode_textures_[i]);
-                if (FAILED(hr)) { std::fprintf(stderr, "[App] CreateTexture2D failed slot %d: 0x%08lx\n", i, hr); return; }
+                if (FAILED(hr)) { LOG_ERROR("CreateTexture2D failed slot {}: {:#010x}", i, static_cast<unsigned>(hr)); return; }
             }
             encode_tex_w_ = tex_w; encode_tex_h_ = tex_h;
             encode_write_slot_ = 0; encode_ready_slot_ = -1;
@@ -653,7 +653,7 @@ void App::start_screen_share(int target_index) {
         };
         stream_audio_capture_->start();
     } else {
-        std::fprintf(stderr, "[App] Loopback audio capture unavailable\n");
+        LOG_WARN("Loopback audio capture unavailable");
         stream_audio_capture_.reset();
     }
 
@@ -770,7 +770,7 @@ void App::encode_loop() {
             bitrate_bps = (std::max)(bitrate_bps, VIDEO_MIN_BITRATE);
             bitrate_bps = (std::min)(bitrate_bps, VIDEO_MAX_BITRATE);
             if (!enc->init(capture_->device(), w, h, 0, 0, encode_fps_, bitrate_bps, codec)) {
-                std::fprintf(stderr, "[App] Encoder init failed at %ux%u\n", w, h);
+                LOG_ERROR("Encoder init failed at {}x{}", w, h);
                 { std::lock_guard<std::mutex> lock(encode_mutex_); encode_active_slot_ = -1; }
                 encode_cv_.notify_one();
                 continue;
@@ -808,7 +808,7 @@ void App::encode_loop() {
             else
                 ok = encoder_->encode_frame(encode_textures_[slot].Get(), ts);
             if (!ok)
-                std::fprintf(stderr, "[App] Encode failed (slot=%d, registered=%d)\n",
+                LOG_ERROR("Encode failed (slot={}, registered={})",
                              slot, encode_registered_ ? 1 : 0);
         }
 
@@ -882,7 +882,7 @@ void App::decode_loop() {
         }
 
         if (batch.size() > MAX_DECODE_QUEUE) {
-            std::fprintf(stderr, "[Video] Decode queue backed up (%zu frames), flushing\n", batch.size());
+            LOG_WARN("Decode queue backed up ({} frames), flushing", batch.size());
             if (decoder_) decoder_->flush();
             while (!batch.empty()) batch.pop();
             if (core_.viewing_sharer_ != 0) core_.send_pli(core_.viewing_sharer_);
@@ -895,7 +895,7 @@ void App::decode_loop() {
                 if (decoder_) decoder_->shutdown();
                 decoder_ = std::make_unique<VideoDecoder>();
                 if (!decoder_->init(work.codec, work.width, work.height)) {
-                    std::fprintf(stderr, "[Video] Decoder init failed codec=%u %ux%u\n",
+                    LOG_ERROR("Decoder init failed codec={} {}x{}",
                                  static_cast<uint8_t>(work.codec), work.width, work.height);
                     decoder_.reset(); batch.pop(); continue;
                 }

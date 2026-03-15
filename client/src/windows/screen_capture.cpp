@@ -1,5 +1,6 @@
 #include <client/screen_capture.h>
 #include <parties/profiler.h>
+#include <parties/log.h>
 
 // WinRT / Windows Graphics Capture headers
 #include <winrt/base.h>
@@ -14,8 +15,6 @@
 
 #include <dwmapi.h>
 #include <dxgi.h>
-
-#include <cstdio>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -142,7 +141,7 @@ bool ScreenCapture::init() {
     }
 
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[ScreenCapture] Failed to create D3D11 device (0x%08lx)\n", hr);
+        LOG_ERROR("Failed to create D3D11 device ({:#010x})", static_cast<unsigned>(hr));
         return false;
     }
 
@@ -156,7 +155,7 @@ bool ScreenCapture::init() {
     try {
         impl_->winrt_device = CreateWinRTDevice(device_.Get());
     } catch (const winrt::hresult_error& e) {
-        std::fprintf(stderr, "[ScreenCapture] WinRT device creation failed: 0x%08x\n",
+        LOG_ERROR("WinRT device creation failed: {:#010x}",
                      static_cast<unsigned>(e.code()));
         delete impl_;
         impl_ = nullptr;
@@ -273,7 +272,7 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
         // Subscribe to item closed (window closed / monitor disconnected)
         impl_->closed_token = impl_->item.Closed(
             [this](GraphicsCaptureItem const&, winrt::Windows::Foundation::IInspectable const&) {
-                std::fprintf(stderr, "[ScreenCapture] Capture item closed\n");
+                LOG_WARN("Capture item closed");
                 capturing_ = false;
                 if (on_closed) on_closed();
             });
@@ -324,7 +323,7 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
 
                 // Update dimensions if changed — recreate pool and skip this frame
                 if (w != width_ || h != height_) {
-                    std::fprintf(stderr, "[ScreenCapture] size changed: %ux%u -> %ux%u\n",
+                    LOG_WARN("size changed: {}x{} -> {}x{}",
                                  width_, height_, w, h);
                     width_ = w;
                     height_ = h;
@@ -377,7 +376,7 @@ bool ScreenCapture::start(const CaptureTarget& target, uint32_t target_fps) {
         return true;
 
     } catch (const winrt::hresult_error& e) {
-        std::fprintf(stderr, "[ScreenCapture] Failed to start capture: 0x%08x\n",
+        LOG_ERROR("Failed to start capture: {:#010x}",
                      static_cast<unsigned>(e.code()));
         return false;
     }

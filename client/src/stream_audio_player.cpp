@@ -1,8 +1,9 @@
 #include <client/stream_audio_player.h>
 #include <parties/profiler.h>
 
+#include <parties/log.h>
+
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 
 namespace parties::client {
@@ -15,7 +16,7 @@ StreamAudioPlayer::~StreamAudioPlayer() {
 
 bool StreamAudioPlayer::init() {
     if (!decoder_.init_decoder(kSampleRate, kChannels)) {
-        std::fprintf(stderr, "[StreamAudio] Failed to init Opus decoder\n");
+        LOG_ERROR("Failed to init Opus decoder");
         return false;
     }
     decoder_initialized_ = true;

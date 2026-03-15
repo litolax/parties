@@ -1,7 +1,7 @@
 #include "nvdec_decoder.h"
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 #include <windows.h>
@@ -70,13 +70,13 @@ bool NvdecDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     CUdevice cu_device = 0;
     CUresult res = cuda_.cuDeviceGet(&cu_device, 0);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuDeviceGet failed: %d\n", res);
+        LOG_ERROR("cuDeviceGet failed: {}", (int)res);
         return false;
     }
 
     res = cuda_.cuCtxCreate(&cu_ctx_, CU_CTX_SCHED_AUTO, cu_device);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuCtxCreate failed: %d\n", res);
+        LOG_ERROR("cuCtxCreate failed: {}", (int)res);
         return false;
     }
 
@@ -87,16 +87,16 @@ bool NvdecDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     res = cuvid_.cuvidGetDecoderCaps(&caps);
     if (res != CUDA_SUCCESS || !caps.bIsSupported) {
-        std::fprintf(stderr, "[NVDEC] %s not supported (res=%d, supported=%d)\n",
-                     codec_name(codec), res, caps.bIsSupported);
+        LOG_ERROR("{} not supported (res={}, supported={})",
+                  codec_name(codec), (int)res, (int)caps.bIsSupported);
         cuda_.cuCtxDestroy(cu_ctx_);
         cu_ctx_ = nullptr;
         return false;
     }
 
     if (width > caps.nMaxWidth || height > caps.nMaxHeight) {
-        std::fprintf(stderr, "[NVDEC] Resolution %ux%u exceeds max %ux%u\n",
-                     width, height, caps.nMaxWidth, caps.nMaxHeight);
+        LOG_ERROR("Resolution {}x{} exceeds max {}x{}",
+                  width, height, caps.nMaxWidth, caps.nMaxHeight);
         cuda_.cuCtxDestroy(cu_ctx_);
         cu_ctx_ = nullptr;
         return false;
@@ -116,7 +116,7 @@ bool NvdecDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     res = cuvid_.cuvidCreateVideoParser(&parser_, &parser_params);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidCreateVideoParser failed: %d\n", res);
+        LOG_ERROR("cuvidCreateVideoParser failed: {}", (int)res);
         cuda_.cuCtxDestroy(cu_ctx_);
         cu_ctx_ = nullptr;
         return false;
@@ -125,8 +125,8 @@ bool NvdecDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     CUcontext dummy;
     cuda_.cuCtxPopCurrent(&dummy);
 
-    std::fprintf(stderr, "[NVDEC] Initialized %s decoder (%ux%u)\n",
-                 codec_name(codec), width_, height_);
+    LOG_INFO("Initialized {} decoder ({}x{})",
+             codec_name(codec), width_, height_);
     initialized_ = true;
     return true;
 }
@@ -137,7 +137,7 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
 
     CUresult res = cuda_.cuCtxPushCurrent(cu_ctx_);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] CUDA context lost (cuCtxPushCurrent=%d)\n", res);
+        LOG_ERROR("CUDA context lost (cuCtxPushCurrent={})", (int)res);
         context_lost_ = true;
         initialized_ = false;
         return false;
@@ -155,7 +155,7 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     cuda_.cuCtxPopCurrent(&dummy);
 
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidParseVideoData failed: %d (GPU context invalidated)\n", res);
+        LOG_ERROR("cuvidParseVideoData failed: {} (GPU context invalidated)", (int)res);
         context_lost_ = true;
         initialized_ = false;
         return false;
@@ -199,7 +199,7 @@ int NvdecDecoder::on_sequence(CUVIDEOFORMAT* fmt) {
 
     if (fmt->coded_width == 0 || fmt->coded_height == 0 ||
         fmt->chroma_format > cudaVideoChromaFormat_444) {
-        std::fprintf(stderr, "[NVDEC] Ignoring invalid sequence header\n");
+        LOG_ERROR("Ignoring invalid sequence header");
         return 1;
     }
 
@@ -223,10 +223,10 @@ int NvdecDecoder::on_sequence(CUVIDEOFORMAT* fmt) {
         return num_decode_surfaces_;
     }
 
-    std::fprintf(stderr, "[NVDEC] on_sequence: recreating decoder (%ux%u bd=%u surfaces=%u -> %ux%u bd=%u surfaces=%u)\n",
-                 width_, height_, bit_depth_, num_decode_surfaces_,
-                 target_w, target_h, fmt->bit_depth_luma_minus8 + 8,
-                 fmt->min_num_decode_surfaces + 4);
+    LOG_INFO("on_sequence: recreating decoder ({}x{} bd={} surfaces={} -> {}x{} bd={} surfaces={})",
+             width_, height_, bit_depth_, num_decode_surfaces_,
+             target_w, target_h, fmt->bit_depth_luma_minus8 + 8,
+             fmt->min_num_decode_surfaces + 4);
 
     if (decoder_) {
         cuvid_.cuvidDestroyDecoder(decoder_);
@@ -266,7 +266,7 @@ int NvdecDecoder::on_sequence(CUVIDEOFORMAT* fmt) {
 
     CUresult res = cuvid_.cuvidCreateDecoder(&decoder_, &create_info);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidCreateDecoder failed: %d\n", res);
+        LOG_ERROR("cuvidCreateDecoder failed: {}", (int)res);
         return 0;
     }
 
@@ -293,7 +293,7 @@ int NvdecDecoder::on_decode(CUVIDPICPARAMS* pic) {
 
     CUresult res = cuvid_.cuvidDecodePicture(decoder_, pic);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidDecodePicture failed: %d\n", res);
+        LOG_ERROR("cuvidDecodePicture failed: {}", (int)res);
         return 0;
     }
     return 1;
@@ -313,7 +313,7 @@ int NvdecDecoder::on_display(CUVIDPARSERDISPINFO* disp_info) {
     CUresult res = cuvid_.cuvidMapVideoFrame64(
         decoder_, disp_info->picture_index, &dev_ptr, &pitch, &proc);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[NVDEC] cuvidMapVideoFrame64 failed: %d\n", res);
+        LOG_ERROR("cuvidMapVideoFrame64 failed: {}", (int)res);
         return 0;
     }
 
@@ -335,7 +335,7 @@ int NvdecDecoder::on_display(CUVIDPARSERDISPINFO* disp_info) {
             copy.Height = height_;
             CUresult r = cuda_.cuMemcpy2D(&copy);
             if (r != CUDA_SUCCESS) {
-                std::fprintf(stderr, "[NVDEC] cuMemcpy2D Y failed: %d\n", r);
+                LOG_ERROR("cuMemcpy2D Y failed: {}", (int)r);
             }
 
             copy.srcDevice = dev_ptr + static_cast<CUdeviceptr>(pitch) * height_;
@@ -343,7 +343,7 @@ int NvdecDecoder::on_display(CUVIDPARSERDISPINFO* disp_info) {
             copy.Height = height_ / 2;
             r = cuda_.cuMemcpy2D(&copy);
             if (r != CUDA_SUCCESS) {
-                std::fprintf(stderr, "[NVDEC] cuMemcpy2D UV failed: %d\n", r);
+                LOG_ERROR("cuMemcpy2D UV failed: {}", (int)r);
             }
         }
     }

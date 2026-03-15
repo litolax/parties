@@ -3,8 +3,8 @@
 #include <wels/codec_api.h>
 #include <wels/codec_def.h>
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <parties/profiler.h>
 #include <parties/video_common.h>
 
@@ -29,7 +29,7 @@ bool OpenH264Encoder::init(ID3D11Device* device, uint32_t width, uint32_t height
 
     int ret = WelsCreateSVCEncoder(&encoder_);
     if (ret != 0 || !encoder_) {
-        std::fprintf(stderr, "[OpenH264] WelsCreateSVCEncoder failed: %d\n", ret);
+        LOG_ERROR("WelsCreateSVCEncoder failed: {}", ret);
         return false;
     }
 
@@ -62,7 +62,7 @@ bool OpenH264Encoder::init(ID3D11Device* device, uint32_t width, uint32_t height
 
     ret = encoder_->InitializeExt(&params);
     if (ret != cmResultSuccess) {
-        std::fprintf(stderr, "[OpenH264] InitializeExt failed: %d\n", ret);
+        LOG_ERROR("InitializeExt failed: {}", ret);
         WelsDestroySVCEncoder(encoder_);
         encoder_ = nullptr;
         return false;
@@ -84,7 +84,7 @@ bool OpenH264Encoder::init(ID3D11Device* device, uint32_t width, uint32_t height
 
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[OpenH264] CreateTexture2D staging failed: 0x%08lx\n", hr);
+        LOG_ERROR("CreateTexture2D staging failed: {:#010x}", hr);
         encoder_->Uninitialize();
         WelsDestroySVCEncoder(encoder_);
         encoder_ = nullptr;
@@ -171,7 +171,7 @@ bool OpenH264Encoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_10
     SFrameBSInfo bs_info = {};
     int ret = encoder_->EncodeFrame(&pic, &bs_info);
     if (ret != cmResultSuccess) {
-        std::fprintf(stderr, "[OpenH264] EncodeFrame failed: %d\n", ret);
+        LOG_ERROR("EncodeFrame failed: {}", ret);
         return false;
     }
 

@@ -1,8 +1,8 @@
 #include "nvenc_encoder.h"
 #include "nvidia_loader.h"
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 namespace parties::encdec::nvidia {
@@ -61,7 +61,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     NVENCSTATUS status = funcs_.nvEncOpenEncodeSessionEx(&session_params, &encoder_);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] OpenEncodeSessionEx failed: %d\n", status);
+        LOG_ERROR("OpenEncodeSessionEx failed: {}", (int)status);
         return false;
     }
 
@@ -83,14 +83,14 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     }
 
     if (!found) {
-        std::fprintf(stderr, "[NVENC] No supported codec found\n");
+        LOG_ERROR("No supported codec found");
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
         return false;
     }
 
-    std::fprintf(stderr, "[NVENC] Selected codec: %s (%ux%u @ %u fps)\n",
-                 codec_name(codec_), width, height, fps);
+    LOG_INFO("Selected codec: {} ({}x{} @ {} fps)",
+             codec_name(codec_), width, height, fps);
 
     GUID encode_guid = (codec_ == VideoCodecId::AV1)  ? NV_ENC_CODEC_AV1_GUID
                      : (codec_ == VideoCodecId::H265) ? NV_ENC_CODEC_HEVC_GUID
@@ -105,7 +105,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,
         &preset_config);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] GetEncodePresetConfigEx failed: %d\n", status);
+        LOG_ERROR("GetEncodePresetConfigEx failed: {}", (int)status);
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
         return false;
@@ -151,7 +151,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     status = funcs_.nvEncInitializeEncoder(encoder_, &init_params_);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] InitializeEncoder failed: %d\n", status);
+        LOG_ERROR("InitializeEncoder failed: {}", (int)status);
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
         return false;
@@ -168,7 +168,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_texture_);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[NVENC] CreateTexture2D staging failed: 0x%08lx\n", hr);
+        LOG_ERROR("CreateTexture2D staging failed: {:#010x}", hr);
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
         return false;
@@ -185,7 +185,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     status = funcs_.nvEncRegisterResource(encoder_, &reg);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] RegisterResource failed: %d\n", status);
+        LOG_ERROR("RegisterResource failed: {}", (int)status);
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
         return false;
@@ -197,7 +197,7 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     status = funcs_.nvEncCreateBitstreamBuffer(encoder_, &bsb);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] CreateBitstreamBuffer failed: %d\n", status);
+        LOG_ERROR("CreateBitstreamBuffer failed: {}", (int)status);
         funcs_.nvEncUnregisterResource(encoder_, registered_resource_);
         funcs_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
@@ -247,7 +247,7 @@ bool NvencEncoder::do_encode(NV_ENC_REGISTERED_PTR resource, int64_t timestamp_1
 
     NVENCSTATUS status = funcs_.nvEncMapInputResource(encoder_, &map);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] MapInputResource failed: %d\n", status);
+        LOG_ERROR("MapInputResource failed: {}", (int)status);
         return false;
     }
 
@@ -274,7 +274,7 @@ bool NvencEncoder::do_encode(NV_ENC_REGISTERED_PTR resource, int64_t timestamp_1
     funcs_.nvEncUnmapInputResource(encoder_, map.mappedResource);
 
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] EncodePicture failed: %d\n", status);
+        LOG_ERROR("EncodePicture failed: {}", (int)status);
         return false;
     }
 
@@ -287,7 +287,7 @@ bool NvencEncoder::do_encode(NV_ENC_REGISTERED_PTR resource, int64_t timestamp_1
         status = funcs_.nvEncLockBitstream(encoder_, &lock);
     }
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] LockBitstream failed: %d\n", status);
+        LOG_ERROR("LockBitstream failed: {}", (int)status);
         return false;
     }
 
@@ -329,8 +329,8 @@ int NvencEncoder::register_input(ID3D11Texture2D* texture) {
 
     NVENCSTATUS status = funcs_.nvEncRegisterResource(encoder_, &reg);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] RegisterResource (external %d) failed: %d\n",
-                     num_external_inputs_, status);
+        LOG_ERROR("RegisterResource (external {}) failed: {}",
+                  num_external_inputs_, (int)status);
         return -1;
     }
 
@@ -373,7 +373,7 @@ void NvencEncoder::set_bitrate(uint32_t bitrate) {
 
     NVENCSTATUS status = funcs_.nvEncReconfigureEncoder(encoder_, &reconfig);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] ReconfigureEncoder failed: %d\n", status);
+        LOG_ERROR("ReconfigureEncoder failed: {}", (int)status);
     }
 }
 

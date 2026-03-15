@@ -74,6 +74,15 @@
       }
     },
     {
+      "name": "retail",
+      "displayName": "Retail (clang-cl Release, no debugger/console)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build-retail",
+      "cacheVariables": {
+        "BUILD_IN_RETAIL": "ON"
+      }
+    },
+    {
       "name": "linux-release",
       "displayName": "Linux Release (server only)",
       "generator": "Ninja",
@@ -111,6 +120,10 @@
     {
       "name": "macos-arm64-release",
       "configurePreset": "macos-arm64-release"
+    },
+    {
+      "name": "retail",
+      "configurePreset": "retail"
     },
     {
       "name": "linux-release",

@@ -4,7 +4,7 @@
 #include <codecapi.h>
 #include <strmif.h>
 
-#include <cstdio>
+#include <parties/log.h>
 #include <parties/profiler.h>
 #include <parties/video_common.h>
 
@@ -57,19 +57,19 @@ bool MftEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     HRESULT hr = MFStartup(MF_VERSION);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] MFStartup failed: 0x%08lx\n", hr);
+        LOG_ERROR("MFStartup failed: {:#010x}", hr);
         return false;
     }
 
     // Create DXGI device manager
     hr = MFCreateDXGIDeviceManager(&dxgi_reset_token_, &dxgi_manager_);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] MFCreateDXGIDeviceManager failed\n");
+        LOG_ERROR("MFCreateDXGIDeviceManager failed");
         return false;
     }
     hr = dxgi_manager_->ResetDevice(device_.Get(), dxgi_reset_token_);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] ResetDevice failed\n");
+        LOG_ERROR("ResetDevice failed");
         return false;
     }
 
@@ -100,17 +100,17 @@ bool MftEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     }
 
     if (!found) {
-        std::fprintf(stderr, "[MftEncoder] No hardware encoder found\n");
+        LOG_ERROR("No hardware encoder found");
         return false;
     }
 
     if (!configure_encoder(width, height, fps, bitrate)) {
-        std::fprintf(stderr, "[MftEncoder] Failed to configure encoder\n");
+        LOG_ERROR("Failed to configure encoder");
         return false;
     }
 
     if (!create_color_converter(input_width, input_height, width, height)) {
-        std::fprintf(stderr, "[MftEncoder] Failed to create color converter\n");
+        LOG_ERROR("Failed to create color converter");
         return false;
     }
 
@@ -151,7 +151,7 @@ bool MftEncoder::try_create_encoder(const GUID& codec_subtype, VideoCodecId id) 
     CoTaskMemFree(activates);
 
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] ActivateObject failed: 0x%08lx\n", hr);
+        LOG_ERROR("ActivateObject failed: {:#010x}", hr);
         return false;
     }
 
@@ -191,7 +191,7 @@ bool MftEncoder::configure_encoder(uint32_t width, uint32_t height,
         MFT_MESSAGE_SET_D3D_MANAGER,
         reinterpret_cast<ULONG_PTR>(dxgi_manager_.Get()));
     if (FAILED(hr))
-        std::fprintf(stderr, "[MftEncoder] Failed to set D3D manager: 0x%08lx\n", hr);
+        LOG_ERROR("Failed to set D3D manager: {:#010x}", hr);
 
     // Output type (must be set BEFORE input type)
     ComPtr<IMFMediaType> output_type;
@@ -205,7 +205,7 @@ bool MftEncoder::configure_encoder(uint32_t width, uint32_t height,
 
     hr = encoder_->SetOutputType(0, output_type.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] SetOutputType failed: 0x%08lx\n", hr);
+        LOG_ERROR("SetOutputType failed: {:#010x}", hr);
         return false;
     }
 
@@ -220,7 +220,7 @@ bool MftEncoder::configure_encoder(uint32_t width, uint32_t height,
 
     hr = encoder_->SetInputType(0, input_type.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] SetInputType failed: 0x%08lx\n", hr);
+        LOG_ERROR("SetInputType failed: {:#010x}", hr);
         return false;
     }
 
@@ -279,7 +279,7 @@ bool MftEncoder::create_color_converter(uint32_t in_w, uint32_t in_h,
         CLSID_VideoProcessorMFT, nullptr, CLSCTX_INPROC_SERVER,
         IID_PPV_ARGS(&converter_));
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] CoCreateInstance VideoProcessorMFT failed: 0x%08lx\n", hr);
+        LOG_ERROR("CoCreateInstance VideoProcessorMFT failed: {:#010x}", hr);
         return false;
     }
 
@@ -296,7 +296,7 @@ bool MftEncoder::create_color_converter(uint32_t in_w, uint32_t in_h,
 
     hr = converter_->SetInputType(0, in_type.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] Converter SetInputType failed: 0x%08lx\n", hr);
+        LOG_ERROR("Converter SetInputType failed: {:#010x}", hr);
         return false;
     }
 
@@ -309,7 +309,7 @@ bool MftEncoder::create_color_converter(uint32_t in_w, uint32_t in_h,
 
     hr = converter_->SetOutputType(0, out_type.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] Converter SetOutputType failed: 0x%08lx\n", hr);
+        LOG_ERROR("Converter SetOutputType failed: {:#010x}", hr);
         return false;
     }
 
@@ -353,7 +353,7 @@ void MftEncoder::encoder_loop() {
 
             hr = encoder_->ProcessInput(0, sample.Get(), 0);
             if (FAILED(hr))
-                std::fprintf(stderr, "[MftEncoder] ProcessInput failed: 0x%08lx\n", hr);
+                LOG_ERROR("ProcessInput failed: {:#010x}", hr);
         } else if (event_type == METransformHaveOutput) {
             collect_output();
         } else if (event_type == METransformDrainComplete) {
@@ -373,7 +373,7 @@ bool MftEncoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) 
     HRESULT hr = MFCreateDXGISurfaceBuffer(
         __uuidof(ID3D11Texture2D), bgra_texture, 0, FALSE, &bgra_buffer);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] MFCreateDXGISurfaceBuffer failed: 0x%08lx\n", hr);
+        LOG_ERROR("MFCreateDXGISurfaceBuffer failed: {:#010x}", hr);
         return false;
     }
 
@@ -386,7 +386,7 @@ bool MftEncoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) 
     // BGRA → NV12 via Video Processor MFT
     hr = converter_->ProcessInput(0, bgra_sample.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] Converter ProcessInput failed: 0x%08lx\n", hr);
+        LOG_ERROR("Converter ProcessInput failed: {:#010x}", hr);
         return false;
     }
 
@@ -394,14 +394,14 @@ bool MftEncoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) 
     DWORD conv_status = 0;
     hr = converter_->ProcessOutput(0, 1, &conv_output, &conv_status);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftEncoder] Converter ProcessOutput failed: 0x%08lx\n", hr);
+        LOG_ERROR("Converter ProcessOutput failed: {:#010x}", hr);
         return false;
     }
 
     ComPtr<IMFSample> nv12_sample;
     nv12_sample.Attach(conv_output.pSample);
     if (!nv12_sample) {
-        std::fprintf(stderr, "[MftEncoder] Converter produced null sample\n");
+        LOG_ERROR("Converter produced null sample");
         return false;
     }
 
@@ -436,7 +436,7 @@ bool MftEncoder::encode(ID3D11Texture2D* bgra_texture, int64_t timestamp_100ns) 
             hr = encoder_->ProcessInput(0, nv12_sample.Get(), 0);
         }
         if (FAILED(hr)) {
-            std::fprintf(stderr, "[MftEncoder] ProcessInput failed: 0x%08lx\n", hr);
+            LOG_ERROR("ProcessInput failed: {:#010x}", hr);
             return false;
         }
         collect_output();

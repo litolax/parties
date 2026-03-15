@@ -7,9 +7,10 @@
 #include <parties/video_common.h>
 #include <parties/profiler.h>
 
+#include <parties/log.h>
+
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -26,27 +27,25 @@ bool Server::start(const Config& cfg) {
 
     // Open database
     if (!db_.open(config_.db_path)) {
-        std::fprintf(stderr, "[Server] Failed to open database\n");
+        LOG_ERROR("Failed to open database");
         return false;
     }
 
     if (!config_.root_fingerprints.empty()) {
-        std::printf("[Server] %zu root fingerprint(s) configured\n",
-                    config_.root_fingerprints.size());
+        LOG_INFO("{} root fingerprint(s) configured", config_.root_fingerprints.size());
     }
 
     // Generate self-signed cert if not present
     if (!std::filesystem::exists(config_.cert_file) ||
         !std::filesystem::exists(config_.key_file)) {
-        std::printf("[Server] Generating self-signed certificate...\n");
+        LOG_INFO("Generating self-signed certificate...");
         if (!parties::generate_self_signed_cert(config_.server_name,
                                                  config_.cert_file,
                                                  config_.key_file)) {
-            std::fprintf(stderr, "[Server] Failed to generate certificate\n");
+            LOG_ERROR("Failed to generate certificate");
             return false;
         }
-        std::printf("[Server] Certificate written to %s / %s\n",
-                    config_.cert_file.c_str(), config_.key_file.c_str());
+        LOG_INFO("Certificate written to {} / {}", config_.cert_file, config_.key_file);
     }
 
     // Start QUIC transport (unified control + data plane)
@@ -79,7 +78,7 @@ bool Server::start(const Config& cfg) {
     };
 
     running_ = true;
-    std::printf("[Server] %s started successfully\n", config_.server_name.c_str());
+    LOG_INFO("{} started successfully", config_.server_name);
     return true;
 }
 
@@ -97,7 +96,7 @@ void Server::stop() {
     running_ = false;
     quic_.stop();
     db_.close();
-    std::printf("[Server] Stopped\n");
+    LOG_INFO("Server stopped");
 }
 
 void Server::process_control_messages() {
@@ -196,6 +195,19 @@ void Server::handle_message(const IncomingMessage& msg) {
 
         BinaryReader reader(msg.payload.data(), msg.payload.size());
 
+        // Check protocol version
+        uint16_t client_version = reader.read_u16();
+        if (reader.error()) {
+            send_error(msg.session_id, "Malformed auth message");
+            break;
+        }
+        if (client_version != protocol::PROTOCOL_VERSION) {
+            LOG_WARN("Protocol version mismatch: server={}, client={}", protocol::PROTOCOL_VERSION, client_version);
+            send_error(msg.session_id, std::format("Protocol version mismatch: server={}, client={}",
+                protocol::PROTOCOL_VERSION, client_version));
+            break;
+        }
+
         // Read public key (32 bytes)
         PublicKey pubkey{};
         reader.read_bytes(pubkey.data(), 32);
@@ -230,8 +242,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         }
 
         Fingerprint fp = parties::public_key_fingerprint(pubkey);
-        std::printf("[Server] Auth from session %u: name='%s' fp=%s\n",
-                    msg.session_id, display_name.c_str(), fp.c_str());
+        LOG_INFO("Auth from session {}: name='{}' fp={}", msg.session_id, display_name, fp);
 
         // Look up or auto-create user
         auto user = db_.get_user_by_pubkey(pubkey);
@@ -243,7 +254,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             for (const auto& root_fp : config_.root_fingerprints) {
                 if (root_fp == fp) {
                     initial_role = Role::Owner;
-                    std::printf("[Server] Root fingerprint matched — granting Owner role\n");
+                    LOG_INFO("Root fingerprint matched -- granting Owner role");
                     break;
                 }
             }
@@ -257,8 +268,7 @@ void Server::handle_message(const IncomingMessage& msg) {
                 send_error(msg.session_id, "Internal error");
                 break;
             }
-            std::printf("[Server] New identity registered: '%s' (id=%u)\n",
-                        display_name.c_str(), user->id);
+            LOG_INFO("New identity registered: '{}' (id={})", display_name, user->id);
         } else {
             // Update display name if changed
             if (user->display_name != display_name) {
@@ -271,8 +281,7 @@ void Server::handle_message(const IncomingMessage& msg) {
                 if (root_fp == fp && user->role != static_cast<int>(Role::Owner)) {
                     db_.set_user_role(user->id, Role::Owner);
                     user->role = static_cast<int>(Role::Owner);
-                    std::printf("[Server] Promoted user '%s' to Owner (root fingerprint)\n",
-                                display_name.c_str());
+                    LOG_INFO("Promoted user '{}' to Owner (root fingerprint)", display_name);
                     break;
                 }
             }
@@ -284,8 +293,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             for (auto& s : all) {
                 if (s->id != msg.session_id && s->authenticated &&
                     s->public_key == pubkey) {
-                    std::printf("[Server] Kicking duplicate session %u for user '%s' (id=%u)\n",
-                                s->id, s->username.c_str(), s->user_id);
+                    LOG_INFO("Kicking duplicate session {} for user '{}' (id={})", s->id, s->username, s->user_id);
                     on_client_disconnect(s->id);
                     quic_.disconnect(s->id);
                 }
@@ -346,8 +354,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             }
         }
 
-        std::printf("[Server] User '%s' (id=%u, role=%d) authenticated\n",
-                    user->display_name.c_str(), user->id, user->role);
+        LOG_INFO("User '{}' (id={}, role={}) authenticated", user->display_name, user->id, user->role);
         break;
     }
 
@@ -413,8 +420,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         }
 
         session->channel_id = channel_id;
-        std::printf("[Server] User '%s' joined channel '%s' (%u)\n",
-                    session->username.c_str(), channel->name.c_str(), channel_id);
+        LOG_INFO("User '{}' joined channel '{}' ({})", session->username, channel->name, channel_id);
 
         // Send user list for the channel
         {
@@ -557,8 +563,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             break;
         }
 
-        std::printf("[Server] Channel '%s' created by '%s'\n",
-                    name.c_str(), session->username.c_str());
+        LOG_INFO("Channel '{}' created by '{}'", name, session->username);
 
         // Broadcast updated channel list to all authenticated clients
         auto all = quic_.get_sessions();
@@ -763,8 +768,7 @@ void Server::handle_message(const IncomingMessage& msg) {
             }
         }
 
-        std::printf("[Server] User '%s' started screen sharing in channel %u (%ux%u)\n",
-                    session->username.c_str(), ch, width, height);
+        LOG_INFO("User '{}' started screen sharing in channel {} ({}x{})", session->username, ch, width, height);
         break;
     }
 
@@ -791,8 +795,7 @@ void Server::handle_message(const IncomingMessage& msg) {
         session->share_width = width;
         session->share_height = height;
 
-        std::printf("[Server] User '%s' encoder ready: codec=%u %ux%u\n",
-                    session->username.c_str(), codec_id, width, height);
+        LOG_INFO("User '{}' encoder ready: codec={} {}x{}", session->username, codec_id, width, height);
         break;
     }
 
@@ -846,8 +849,7 @@ void Server::handle_message(const IncomingMessage& msg) {
     }
 
     default:
-        std::fprintf(stderr, "[Server] Unhandled message type 0x%04X from session %u\n",
-                     static_cast<unsigned>(msg.type), msg.session_id);
+        LOG_WARN("Unhandled message type {:#06x} from session {}", static_cast<unsigned>(msg.type), msg.session_id);
         break;
     }
 }
@@ -1022,8 +1024,7 @@ void Server::stop_screen_share(ChannelId channel_id, UserId user_id) {
         }
     }
 
-    std::printf("[Server] User %u stopped screen sharing in channel %u\n",
-                user_id, channel_id);
+    LOG_INFO("User {} stopped screen sharing in channel {}", user_id, channel_id);
 }
 
 void Server::send_channel_key(uint32_t session_id, ChannelId channel_id) {
@@ -1034,7 +1035,7 @@ void Server::send_channel_key(uint32_t session_id, ChannelId channel_id) {
         parties::random_bytes(key.data(), key.size());
         channel_keys_[channel_id] = key;
         it = channel_keys_.find(channel_id);
-        std::printf("[Server] Generated encryption key for channel %u\n", channel_id);
+        LOG_INFO("Generated encryption key for channel {}", channel_id);
     }
 
     BinaryWriter writer;

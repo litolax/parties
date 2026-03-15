@@ -1,5 +1,5 @@
 #include <parties/quic_common.h>
-#include <cstdio>
+#include <parties/log.h>
 
 namespace parties {
 
@@ -10,11 +10,11 @@ const QUIC_API_TABLE* quic_init() {
 
     QUIC_STATUS status = MsQuicOpen2(&g_quic_api);
     if (QUIC_FAILED(status)) {
-        std::fprintf(stderr, "[QUIC] MsQuicOpen2 failed: 0x%lx\n", (unsigned long)status);
+        LOG_ERROR("MsQuicOpen2 failed: {:#x}", (unsigned long)status);
         return nullptr;
     }
 
-    std::printf("[QUIC] MsQuic initialized\n");
+    LOG_INFO("MsQuic initialized");
     return g_quic_api;
 }
 
@@ -22,7 +22,7 @@ void quic_cleanup() {
     if (g_quic_api) {
         MsQuicClose(g_quic_api);
         g_quic_api = nullptr;
-        std::printf("[QUIC] MsQuic cleaned up\n");
+        LOG_INFO("MsQuic cleaned up");
     }
 }
 

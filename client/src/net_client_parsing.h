@@ -8,8 +8,8 @@
 #include <client/net_client.h>
 #include <parties/protocol.h>
 #include <parties/thread_queue.h>
+#include <parties/log.h>
 
-#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <vector>
@@ -29,7 +29,7 @@ inline void process_stream_data(const uint8_t* data, size_t len,
         std::memcpy(&msg_len, buf.data(), 4);
 
         if (msg_len < 2 || msg_len > 1024u * 1024u) {
-            std::fprintf(stderr, "[NetClient] Invalid control message length %u — resetting\n", msg_len);
+            LOG_ERROR("Invalid control message length {} — resetting", msg_len);
             buf.clear();
             break;
         }
@@ -65,7 +65,7 @@ inline void process_video_stream_data(
         std::memcpy(&frame_len, buf.data(), 4);
 
         if (frame_len == 0 || frame_len > 4u * 1024u * 1024u) {
-            std::fprintf(stderr, "[NetClient] Invalid video frame length %u — resetting\n", frame_len);
+            LOG_ERROR("Invalid video frame length {} — resetting", frame_len);
             buf.clear();
             break;
         }

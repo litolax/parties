@@ -3,7 +3,7 @@
 #include <parties/protocol.h>
 #include <parties/profiler.h>
 
-#include <cstdio>
+#include <parties/log.h>
 #include <cstring>
 
 namespace parties::server {
@@ -25,7 +25,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
 	ZoneScopedN("QuicServer::start");
     api_ = parties::quic_api();
     if (!api_) {
-        std::fprintf(stderr, "[QuicServer] MsQuic not initialized\n");
+        LOG_ERROR("MsQuic not initialized");
         return false;
     }
 
@@ -35,7 +35,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
     QUIC_REGISTRATION_CONFIG reg_config = { "parties_server", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
     status = api_->RegistrationOpen(&reg_config, &registration_);
     if (QUIC_FAILED(status)) {
-        std::fprintf(stderr, "[QuicServer] RegistrationOpen failed: 0x%lx\n", (unsigned long)status);
+        LOG_ERROR("RegistrationOpen failed: {:#x}", (unsigned long)status);
         return false;
     }
 
@@ -60,7 +60,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
     status = api_->ConfigurationOpen(registration_, &alpn, 1, &settings,
                                       sizeof(settings), nullptr, &configuration_);
     if (QUIC_FAILED(status)) {
-        std::fprintf(stderr, "[QuicServer] ConfigurationOpen failed: 0x%lx\n", (unsigned long)status);
+        LOG_ERROR("ConfigurationOpen failed: {:#x}", (unsigned long)status);
         api_->RegistrationClose(registration_);
         registration_ = nullptr;
         return false;
@@ -78,7 +78,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
 
         status = api_->ConfigurationLoadCredential(configuration_, &cred_config);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[QuicServer] ConfigurationLoadCredential failed: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("ConfigurationLoadCredential failed: {:#x}", (unsigned long)status);
             api_->ConfigurationClose(configuration_);
             configuration_ = nullptr;
             api_->RegistrationClose(registration_);
@@ -90,7 +90,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
     // Open and start listener
     status = api_->ListenerOpen(registration_, listener_callback, this, &listener_);
     if (QUIC_FAILED(status)) {
-        std::fprintf(stderr, "[QuicServer] ListenerOpen failed: 0x%lx\n", (unsigned long)status);
+        LOG_ERROR("ListenerOpen failed: {:#x}", (unsigned long)status);
         api_->ConfigurationClose(configuration_);
         configuration_ = nullptr;
         api_->RegistrationClose(registration_);
@@ -104,7 +104,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
 
     status = api_->ListenerStart(listener_, &alpn, 1, &addr);
     if (QUIC_FAILED(status)) {
-        std::fprintf(stderr, "[QuicServer] ListenerStart failed: 0x%lx\n", (unsigned long)status);
+        LOG_ERROR("ListenerStart failed: {:#x}", (unsigned long)status);
         api_->ListenerClose(listener_);
         listener_ = nullptr;
         api_->ConfigurationClose(configuration_);
@@ -115,7 +115,7 @@ bool QuicServer::start(const std::string& listen_ip, uint16_t port, size_t max_c
     }
 
     running_ = true;
-    std::printf("[QuicServer] Listening on port %u\n", port);
+    LOG_INFO("Listening on port {}", port);
     return true;
 }
 
@@ -150,7 +150,7 @@ void QuicServer::stop() {
         registration_ = nullptr;
     }
 
-    std::printf("[QuicServer] Stopped\n");
+    LOG_INFO("QuicServer stopped");
 }
 
 // ── Control plane ──
@@ -345,7 +345,7 @@ QUIC_STATUS QuicServer::on_new_connection(HQUIC /*listener*/, QUIC_LISTENER_EVEN
         sessions_[session_id] = session;
     }
 
-    std::printf("[QuicServer] New connection: session %u\n", session_id);
+    LOG_INFO("New connection: session {}", session_id);
     return QUIC_STATUS_SUCCESS;
 }
 
@@ -353,7 +353,7 @@ QUIC_STATUS QuicServer::on_connection_event(HQUIC connection, uint32_t session_i
                                              QUIC_CONNECTION_EVENT* event) {
     switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
-        std::printf("[QuicServer] Session %u connected\n", session_id);
+        LOG_INFO("Session {} connected", session_id);
         // Send resumption ticket for 0-RTT support
         api_->ConnectionSendResumptionTicket(connection,
             QUIC_SEND_RESUMPTION_FLAG_NONE, 0, nullptr);
@@ -373,11 +373,11 @@ QUIC_STATUS QuicServer::on_connection_event(HQUIC connection, uint32_t session_i
                 if (!it->second->quic_control_stream) {
                     // First stream = control
                     it->second->quic_control_stream = stream;
-                    std::printf("[QuicServer] Session %u opened control stream\n", session_id);
+                    LOG_INFO("Session {} opened control stream", session_id);
                 } else {
                     // Second stream = video
                     it->second->quic_video_stream = stream;
-                    std::printf("[QuicServer] Session %u opened video stream\n", session_id);
+                    LOG_INFO("Session {} opened video stream", session_id);
                 }
             }
         }
@@ -415,16 +415,16 @@ QUIC_STATUS QuicServer::on_connection_event(HQUIC connection, uint32_t session_i
     }
 
     case QUIC_CONNECTION_EVENT_RESUMED:
-        std::printf("[QuicServer] Session %u resumed (0-RTT)\n", session_id);
+        LOG_INFO("Session {} resumed (0-RTT)", session_id);
         break;
 
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-        std::printf("[QuicServer] Session %u shutting down\n", session_id);
+        LOG_INFO("Session {} shutting down", session_id);
         break;
 
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE: {
-        std::printf("[QuicServer] Session %u shutdown complete\n", session_id);
+        LOG_INFO("Session {} shutdown complete", session_id);
 
         // Notify disconnect callback
         if (on_disconnect)
@@ -561,8 +561,7 @@ void QuicServer::process_stream_data(uint32_t session_id,
         std::memcpy(&msg_len, buffer.data(), 4);
 
         if (msg_len < 2 || msg_len > 1024 * 1024) {
-            std::fprintf(stderr, "[QuicServer] Invalid message length %u from session %u\n",
-                         msg_len, session_id);
+            LOG_ERROR("Invalid message length {} from session {}", msg_len, session_id);
             buffer.clear();
             break;
         }
@@ -607,8 +606,7 @@ void QuicServer::process_video_stream_data(uint32_t session_id,
             std::memcpy(&frame_len, buffer.data(), 4);
 
             if (frame_len == 0 || frame_len > 4 * 1024 * 1024) {
-                std::fprintf(stderr, "[QuicServer] Invalid video frame length %u from session %u\n",
-                             frame_len, session_id);
+                LOG_ERROR("Invalid video frame length {} from session {}", frame_len, session_id);
                 buffer.clear();
                 break;
             }

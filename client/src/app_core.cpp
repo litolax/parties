@@ -3,11 +3,11 @@
 #include <parties/serialization.h>
 #include <parties/crypto.h>
 #include <parties/permissions.h>
+#include <parties/log.h>
 
 #include <RmlUi/Core/Core.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -28,7 +28,7 @@ bool AppCore::init(const std::string& settings_path, PlatformBridge bridge, Rml:
     bridge_ = std::move(bridge);
 
     if (!settings_.open(settings_path)) {
-        std::fprintf(stderr, "[AppCore] Failed to open settings: %s\n", settings_path.c_str());
+        LOG_ERROR("Failed to open settings: {}", settings_path);
     }
 
     // Wire audio subsystems
@@ -96,11 +96,11 @@ bool AppCore::init(const std::string& settings_path, PlatformBridge bridge, Rml:
 
     // Initialize models with RmlUi context
     if (!server_model_.init(rml_context)) {
-        std::fprintf(stderr, "[AppCore] server_model init failed\n");
+        LOG_ERROR("server_model init failed");
         return false;
     }
     if (!model_.init(rml_context)) {
-        std::fprintf(stderr, "[AppCore] model init failed\n");
+        LOG_ERROR("model init failed");
         return false;
     }
 
@@ -395,6 +395,7 @@ void AppCore::send_auth_identity()
     }
 
     BinaryWriter writer;
+    writer.write_u16(protocol::PROTOCOL_VERSION);
     writer.write_bytes(public_key_.data(), public_key_.size());
     writer.write_string(username_);
     writer.write_u64(now);
@@ -981,7 +982,7 @@ void AppCore::on_screen_share_denied(const uint8_t* /*data*/, size_t /*len*/)
     model_.is_sharing = false;
     model_.dirty("is_sharing");
     if (bridge_.stop_screen_share) bridge_.stop_screen_share();
-    std::fprintf(stderr, "[AppCore] Screen share denied by server\n");
+    LOG_WARN("Screen share denied by server");
 }
 
 void AppCore::on_admin_result(const uint8_t* data, size_t len)
@@ -1002,7 +1003,7 @@ void AppCore::on_server_error(const uint8_t* data, size_t len)
     std::string msg = reader.read_string();
     if (reader.error()) return;
 
-    std::fprintf(stderr, "[AppCore] Server error: %s\n", msg.c_str());
+    LOG_ERROR("Server error: {}", msg);
 
     if (server_model_.show_login) {
         server_model_.login_error  = Rml::String(msg);
@@ -1361,8 +1362,8 @@ void AppCore::setup_model_callbacks()
         model_.dirty("show_seed_phrase"); model_.dirty("identity_seed_phrase");
         model_.dirty("show_private_key"); model_.dirty("identity_private_key");
 
-        std::printf("[AppCore] Identity imported: %s\n",
-                    parties::public_key_fingerprint(pk).c_str());
+        LOG_INFO("Identity imported: {}",
+                    parties::public_key_fingerprint(pk));
     };
 
     model_.on_cancel_import = [this]() {
@@ -1459,10 +1460,10 @@ void AppCore::setup_server_model_callbacks()
         std::string phrase(server_model_.seed_phrase);
         SecretKey sk{}; PublicKey pk{};
         if (!parties::derive_keypair(phrase, sk, pk)) {
-            std::fprintf(stderr, "[AppCore] Failed to derive keypair\n"); return;
+            LOG_ERROR("Failed to derive keypair"); return;
         }
         if (!settings_.save_identity(phrase, sk, pk)) {
-            std::fprintf(stderr, "[AppCore] Failed to save identity\n"); return;
+            LOG_ERROR("Failed to save identity"); return;
         }
         secret_key_ = sk; public_key_ = pk; has_identity_ = true; seed_phrase_ = phrase;
         server_model_.fingerprint   = Rml::String(parties::public_key_fingerprint(pk));
@@ -1470,8 +1471,8 @@ void AppCore::setup_server_model_callbacks()
         server_model_.show_onboarding = false;
         server_model_.dirty("fingerprint"); server_model_.dirty("has_identity");
         server_model_.dirty("show_onboarding");
-        std::printf("[AppCore] Identity saved: %s\n",
-                    parties::public_key_fingerprint(pk).c_str());
+        LOG_INFO("Identity saved: {}",
+                    parties::public_key_fingerprint(pk));
     };
 
     server_model_.on_restore_identity = [this]() {

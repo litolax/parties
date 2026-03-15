@@ -23,8 +23,13 @@ COPY . .
 # Symlink vcpkg into the source tree so CMakePresets paths resolve
 RUN ln -s /opt/vcpkg /src/vcpkg
 
+# Sentry DSN (optional — passed via --build-arg)
+ARG SENTRY_DSN_SERVER=""
+
 # Configure (vcpkg install + cmake generate)
-RUN cmake --preset linux-release
+RUN cmake --preset linux-release \
+    -DENABLE_SENTRY=$([ -n "$SENTRY_DSN_SERVER" ] && echo "ON" || echo "OFF") \
+    -DSENTRY_DSN_SERVER="$SENTRY_DSN_SERVER"
 
 # Build (compile + link)
 RUN cmake --build build-linux --config Release

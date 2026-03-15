@@ -2,8 +2,8 @@
 
 #include <dav1d/dav1d.h>
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 namespace parties::encdec::dav1d {
@@ -28,7 +28,7 @@ bool Dav1dDecoder::init(VideoCodecId codec, uint32_t /*width*/, uint32_t /*heigh
 
     int ret = dav1d_open(&ctx_, &settings);
     if (ret < 0) {
-        std::fprintf(stderr, "[dav1d] dav1d_open failed: %d\n", ret);
+        LOG_ERROR("dav1d_open failed: {}", ret);
         return false;
     }
 
@@ -68,7 +68,7 @@ bool Dav1dDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     while (dav1d_data.sz > 0) {
         int ret = dav1d_send_data(ctx_, &dav1d_data);
         if (ret < 0 && ret != DAV1D_ERR(EAGAIN)) {
-            std::fprintf(stderr, "[dav1d] dav1d_send_data failed: %d (len=%zu)\n", ret, len);
+            LOG_ERROR("dav1d_send_data failed: {} (len={})", ret, len);
             dav1d_data_unref(&dav1d_data);
             return false;
         }

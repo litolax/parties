@@ -6,7 +6,7 @@
 #include <AMF/components/VideoEncoderAV1.h>
 
 #include <parties/profiler.h>
-#include <cstdio>
+#include <parties/log.h>
 
 namespace parties::encdec::amd {
 
@@ -45,13 +45,13 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     AMF_RESULT res = factory_->CreateContext(&context_);
     if (res != AMF_OK || !context_) {
-        std::fprintf(stderr, "[AMF] CreateContext failed: %d\n", res);
+        LOG_ERROR("CreateContext failed: {}", (int)res);
         return false;
     }
 
     res = context_->InitDX11(device);
     if (res != AMF_OK) {
-        std::fprintf(stderr, "[AMF] InitDX11 failed: %d\n", res);
+        LOG_ERROR("InitDX11 failed: {}", (int)res);
         context_->Release();
         context_ = nullptr;
         return false;
@@ -81,14 +81,14 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
     }
 
     if (!found) {
-        std::fprintf(stderr, "[AMF] No supported encoder codec found\n");
+        LOG_ERROR("No supported encoder codec found");
         context_->Release();
         context_ = nullptr;
         return false;
     }
 
-    std::fprintf(stderr, "[AMF] Selected encoder codec: %s (%ux%u @ %u fps)\n",
-                 codec_name(codec_), width, height, fps);
+    LOG_INFO("Selected encoder codec: {} ({}x{} @ {} fps)",
+             codec_name(codec_), width, height, fps);
 
     if (codec_ == VideoCodecId::AV1) {
         encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_USAGE,
@@ -131,7 +131,7 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     res = encoder_->Init(amf::AMF_SURFACE_BGRA, width, height);
     if (res != AMF_OK) {
-        std::fprintf(stderr, "[AMF] Encoder Init(BGRA) failed: %d\n", res);
+        LOG_ERROR("Encoder Init(BGRA) failed: {}", (int)res);
         encoder_->Release();
         encoder_ = nullptr;
         context_->Release();
@@ -151,7 +151,7 @@ bool AmfEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_texture_);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[AMF] CreateTexture2D staging failed: 0x%08lx\n", hr);
+        LOG_ERROR("CreateTexture2D staging failed: {:#010x}", hr);
         encoder_->Terminate();
         encoder_->Release();
         encoder_ = nullptr;
@@ -207,7 +207,7 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
     amf::AMFSurface* surface = nullptr;
     AMF_RESULT res = context_->CreateSurfaceFromDX11Native(texture, &surface, nullptr);
     if (res != AMF_OK || !surface) {
-        std::fprintf(stderr, "[AMF] CreateSurfaceFromDX11Native failed: %d\n", res);
+        LOG_ERROR("CreateSurfaceFromDX11Native failed: {}", (int)res);
         return false;
     }
 
@@ -232,7 +232,7 @@ bool AmfEncoder::do_encode(ID3D11Texture2D* texture, int64_t timestamp_100ns) {
 
     if (res != AMF_OK) {
         if (res == AMF_INPUT_FULL) return true;
-        std::fprintf(stderr, "[AMF] SubmitInput failed: %d\n", res);
+        LOG_ERROR("SubmitInput failed: {}", (int)res);
         return false;
     }
 

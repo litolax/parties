@@ -11,9 +11,10 @@
 
 #include "net_client_parsing.h"
 
+#include <parties/log.h>
+
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -57,7 +58,7 @@ struct NetClient::Impl {
 
         api = parties::quic_api();
         if (!api) {
-            std::fprintf(stderr, "[NetClient] MsQuic not initialized\n");
+            LOG_ERROR("MsQuic not initialized");
             return false;
         }
 
@@ -66,7 +67,7 @@ struct NetClient::Impl {
         QUIC_REGISTRATION_CONFIG reg_cfg = { "parties_client", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
         status = api->RegistrationOpen(&reg_cfg, &registration);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[NetClient] RegistrationOpen: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("RegistrationOpen: {:#x}", (unsigned long)status);
             return false;
         }
 
@@ -81,7 +82,7 @@ struct NetClient::Impl {
         status = api->ConfigurationOpen(registration, &alpn, 1, &settings,
                                         sizeof(settings), nullptr, &configuration);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[NetClient] ConfigurationOpen: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("ConfigurationOpen: {:#x}", (unsigned long)status);
             cleanup_handles();
             return false;
         }
@@ -95,14 +96,14 @@ struct NetClient::Impl {
 
         status = api->ConfigurationLoadCredential(configuration, &cred);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[NetClient] ConfigurationLoadCredential: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("ConfigurationLoadCredential: {:#x}", (unsigned long)status);
             cleanup_handles();
             return false;
         }
 
         status = api->ConnectionOpen(registration, s_connection_cb, this, &connection);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[NetClient] ConnectionOpen: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("ConnectionOpen: {:#x}", (unsigned long)status);
             cleanup_handles();
             return false;
         }
@@ -111,20 +112,19 @@ struct NetClient::Impl {
             status = api->SetParam(connection, QUIC_PARAM_CONN_RESUMPTION_TICKET,
                                    static_cast<uint32_t>(ticket_len), ticket);
             if (QUIC_FAILED(status))
-                std::fprintf(stderr, "[NetClient] SetParam(RESUMPTION_TICKET): 0x%lx (non-fatal)\n",
-                             (unsigned long)status);
+                LOG_WARN("SetParam(RESUMPTION_TICKET): {:#x} (non-fatal)", (unsigned long)status);
         }
 
         status = api->ConnectionStart(connection, configuration,
                                       QUIC_ADDRESS_FAMILY_UNSPEC,
                                       host.c_str(), port);
         if (QUIC_FAILED(status)) {
-            std::fprintf(stderr, "[NetClient] ConnectionStart: 0x%lx\n", (unsigned long)status);
+            LOG_ERROR("ConnectionStart: {:#x}", (unsigned long)status);
             cleanup_handles();
             return false;
         }
 
-        std::printf("[NetClient] Connecting to %s:%u (MsQuic)...\n", host.c_str(), port);
+        LOG_INFO("Connecting to {}:{} (MsQuic)...", host, port);
         connecting      = true;
         connect_failed_ = false;
         return true;
@@ -229,7 +229,7 @@ struct NetClient::Impl {
         switch (ev->Type) {
 
         case QUIC_CONNECTION_EVENT_CONNECTED: {
-            std::printf("[NetClient] QUIC connected\n");
+            LOG_INFO("QUIC connected");
             connecting = false;
 
             // Control stream
@@ -239,7 +239,7 @@ struct NetClient::Impl {
                 QUIC_SUCCEEDED(api->StreamStart(stream, QUIC_STREAM_START_FLAG_NONE))) {
                 control_stream = stream;
             } else {
-                std::fprintf(stderr, "[NetClient] Control stream failed\n");
+                LOG_ERROR("Control stream failed");
                 if (stream) api->StreamClose(stream);
             }
 
@@ -251,7 +251,7 @@ struct NetClient::Impl {
                     QUIC_SUCCEEDED(api->StreamStart(vs, QUIC_STREAM_START_FLAG_IMMEDIATE))) {
                     video_stream = vs;
                 } else {
-                    std::fprintf(stderr, "[NetClient] Video stream failed\n");
+                    LOG_ERROR("Video stream failed");
                     if (vs) api->StreamClose(vs);
                 }
                 connected = true;
@@ -278,7 +278,7 @@ struct NetClient::Impl {
             auto* cert = static_cast<QUIC_BUFFER*>(ev->PEER_CERTIFICATE_RECEIVED.Certificate);
             if (cert && cert->Buffer && cert->Length > 0) {
                 server_fingerprint = parties::sha256_hex(cert->Buffer, cert->Length);
-                std::printf("[NetClient] Server fingerprint: %s\n", server_fingerprint.c_str());
+                LOG_INFO("Server fingerprint: {}", server_fingerprint);
             }
             break;
         }
@@ -291,20 +291,20 @@ struct NetClient::Impl {
         }
 
         case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
-            std::printf("[NetClient] Shutdown by transport: 0x%lx\n",
-                        (unsigned long)ev->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
+            LOG_INFO("Shutdown by transport: {:#x}",
+                     (unsigned long)ev->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
             if (connecting) connect_failed_ = true;
             connecting = false; connected = false;
             break;
 
         case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-            std::printf("[NetClient] Shutdown by peer\n");
+            LOG_INFO("Shutdown by peer");
             if (connecting) connect_failed_ = true;
             connecting = false; connected = false;
             break;
 
         case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-            std::printf("[NetClient] Shutdown complete\n");
+            LOG_INFO("Shutdown complete");
             if (connecting) connect_failed_ = true;
             connecting = false; connected = false;
             control_stream = nullptr; video_stream = nullptr;

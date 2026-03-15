@@ -1,6 +1,7 @@
 #include <client/rmlui_backend.h>
 
-#include <cstdio>
+#include <parties/log.h>
+
 #include <cstring>
 #include <fstream>
 
@@ -114,7 +115,7 @@ EmbeddedFileInterface::EmbeddedFileInterface() {
     entries_["ui/fonts/Inter-Regular.ttf"] = { embed_font_regular, sizeof(embed_font_regular) };
     entries_["ui/fonts/Inter-Medium.ttf"] = { embed_font_medium, sizeof(embed_font_medium) };
     entries_["ui/fonts/Inter-Bold.ttf"] = { embed_font_bold, sizeof(embed_font_bold) };
-    std::printf("[UI] Embedded resources: %zu files\n", entries_.size());
+    LOG_INFO("Embedded resources: {} files", entries_.size());
 }
 
 Rml::FileHandle EmbeddedFileInterface::Open(const Rml::String& path) {

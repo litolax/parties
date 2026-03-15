@@ -8,10 +8,13 @@
 #include "vulkan/RmlUi_Renderer_VK.h"
 #include "RmlUi_Platform_Win32.h"
 
+#ifndef PARTIES_RETAIL
 #include <RmlUi/Debugger.h>
+#endif
 #include <RmlUi/Core/StyleSheetSpecification.h>
 
-#include <cstdio>
+#include <parties/log.h>
+
 #include <cstring>
 
 namespace parties::client {
@@ -76,14 +79,14 @@ bool UiManager::init(HWND hwnd, int renderer_id) {
         break;
     }
     if (!*render_interface_) {
-        std::fprintf(stderr, "[UI] Failed to create %s render interface\n", renderer_name);
+        LOG_ERROR("Failed to create {} render interface", renderer_name);
         return false;
     }
 
     Rml::SetRenderInterface(render_interface_.get());
 
     if (!Rml::Initialise()) {
-        std::fprintf(stderr, "[UI] Failed to initialise RmlUi\n");
+        LOG_ERROR("Failed to initialise RmlUi");
         return false;
     }
 
@@ -103,12 +106,14 @@ bool UiManager::init(HWND hwnd, int renderer_id) {
     // Create context
     context_ = Rml::CreateContext("main", Rml::Vector2i(width, height));
     if (!context_) {
-        std::fprintf(stderr, "[UI] Failed to create RmlUi context\n");
+        LOG_ERROR("Failed to create RmlUi context");
         Rml::Shutdown();
         return false;
     }
 
+#ifndef PARTIES_RETAIL
     Rml::Debugger::Initialise(context_);
+#endif
 
     // DPI scaling
     UINT dpi = GetDpiForWindow(hwnd);
@@ -124,7 +129,7 @@ bool UiManager::init(HWND hwnd, int renderer_id) {
     text_input_editor_ = std::make_unique<TextInputMethodEditor_Win32>();
 
     initialised_ = true;
-    std::printf("[UI] Initialised %s (%dx%d, DPI scale=%.2f)\n", renderer_name, width, height, dpi_scale_);
+    LOG_INFO("Initialised {} ({}x{}, DPI scale={:.2f})", renderer_name, width, height, dpi_scale_);
     return true;
 }
 
@@ -147,7 +152,7 @@ Rml::ElementDocument* UiManager::load_document(const std::string& path) {
     if (!context_) return nullptr;
     auto* doc = context_->LoadDocument(path);
     if (!doc)
-        std::fprintf(stderr, "[UI] Failed to load document: %s\n", path.c_str());
+        LOG_ERROR("Failed to load document: {}", path);
     return doc;
 }
 

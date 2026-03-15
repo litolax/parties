@@ -1,7 +1,7 @@
 #include <server/config.h>
 
 #include <toml.hpp>
-#include <cstdio>
+#include <parties/log.h>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -31,13 +31,13 @@ Config Config::load(const std::string& toml_path) {
     // ── Load TOML file (if present) ──
     std::ifstream test(toml_path);
     if (!test.good()) {
-        std::fprintf(stderr, "Warning: %s not found, using defaults.\n", toml_path.c_str());
+        LOG_WARN("{} not found, using defaults", toml_path);
     } else {
         test.close();
 
         auto result = toml::try_parse(toml_path);
         if (result.is_err()) {
-            std::fprintf(stderr, "Warning: Failed to parse %s, using defaults.\n", toml_path.c_str());
+            LOG_WARN("Failed to parse {}, using defaults", toml_path);
         } else {
             auto data = std::move(result.unwrap());
 

@@ -3,7 +3,7 @@
 #include <wels/codec_api.h>
 #include <wels/codec_def.h>
 
-#include <cstdio>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 namespace parties::encdec::openh264 {
@@ -22,7 +22,7 @@ bool OpenH264Decoder::init(VideoCodecId codec, uint32_t /*width*/, uint32_t /*he
 
     long ret = WelsCreateDecoder(&decoder_);
     if (ret != 0 || !decoder_) {
-        std::fprintf(stderr, "[OpenH264] WelsCreateDecoder failed: %ld\n", ret);
+        LOG_ERROR("WelsCreateDecoder failed: {}", ret);
         return false;
     }
 
@@ -32,7 +32,7 @@ bool OpenH264Decoder::init(VideoCodecId codec, uint32_t /*width*/, uint32_t /*he
 
     ret = decoder_->Initialize(&params);
     if (ret != cmResultSuccess) {
-        std::fprintf(stderr, "[OpenH264] Decoder Initialize failed: %ld\n", ret);
+        LOG_ERROR("Decoder Initialize failed: {}", ret);
         WelsDestroyDecoder(decoder_);
         decoder_ = nullptr;
         return false;

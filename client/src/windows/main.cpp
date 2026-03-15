@@ -4,14 +4,17 @@
 #include <parties/net_common.h>
 #include <parties/quic_common.h>
 #include <parties/profiler.h>
+#include <parties/log.h>
+#include <parties/crash_reporter.h>
 
 #include "RmlUi_Platform_Win32.h"
 
 #include <dwmapi.h>
 #include <windowsx.h>
+#ifndef PARTIES_RETAIL
 #include <RmlUi/Debugger.h>
+#endif
 
-#include <cstdio>
 #include <cstring>
 
 #pragma comment(lib, "dwmapi.lib")
@@ -224,6 +227,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
 
+#ifndef PARTIES_RETAIL
     // F8 toggles RmlUi debugger
     case WM_KEYDOWN:
         if (wParam == VK_F8) {
@@ -231,6 +235,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         break;
+#endif
     }
 
     // Forward input events to RmlUi via vendored Win32 platform layer
@@ -250,7 +255,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 int main(int argc, char* argv[]) {
     TracySetThreadName("Main");
-    std::printf("%s Client v%s\n", parties::APP_NAME, parties::APP_VERSION);
+#ifdef SENTRY_DSN_VALUE
+    parties::crash_reporter_init(SENTRY_DSN_VALUE);
+#else
+    parties::crash_reporter_init(nullptr);
+#endif
+    parties::log_init(parties::LogTarget::Client);
+    LOG_INFO("{} Client v{}", parties::APP_NAME, parties::APP_VERSION);
 
     // Parse command-line flags for renderer selection
     // --dx11    = DirectX 11
@@ -272,18 +283,18 @@ int main(int argc, char* argv[]) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     if (!parties::crypto_init()) {
-        std::fprintf(stderr, "Failed to initialize crypto\n");
+        LOG_ERROR("Failed to initialize crypto");
         return 1;
     }
 
     if (!parties::net_init()) {
-        std::fprintf(stderr, "Failed to initialize networking\n");
+        LOG_ERROR("Failed to initialize networking");
         parties::crypto_cleanup();
         return 1;
     }
 
     if (!parties::quic_init()) {
-        std::fprintf(stderr, "Failed to initialize QUIC\n");
+        LOG_ERROR("Failed to initialize QUIC");
         parties::net_cleanup();
         parties::crypto_cleanup();
         return 1;
@@ -301,7 +312,7 @@ int main(int argc, char* argv[]) {
     wc.lpszClassName = L"PartiesClient";
 
     if (!RegisterClassExW(&wc)) {
-        std::fprintf(stderr, "Failed to register window class\n");
+        LOG_ERROR("Failed to register window class");
         parties::net_cleanup();
         parties::crypto_cleanup();
         return 1;
@@ -325,7 +336,7 @@ int main(int argc, char* argv[]) {
         nullptr, nullptr, wc.hInstance, nullptr);
 
     if (!hwnd) {
-        std::fprintf(stderr, "Failed to create window\n");
+        LOG_ERROR("Failed to create window");
         UnregisterClassW(L"PartiesClient", wc.hInstance);
         parties::net_cleanup();
         parties::crypto_cleanup();
@@ -341,7 +352,7 @@ int main(int argc, char* argv[]) {
     SetPropW(hwnd, L"App", &app);
 
     if (!app.init(hwnd, static_cast<int>(renderer))) {
-        std::fprintf(stderr, "Failed to initialize application\n");
+        LOG_ERROR("Failed to initialize application");
         SetPropW(hwnd, L"App", nullptr);
         DestroyWindow(hwnd);
         UnregisterClassW(L"PartiesClient", wc.hInstance);
@@ -395,5 +406,7 @@ int main(int argc, char* argv[]) {
     parties::quic_cleanup();
     parties::net_cleanup();
     parties::crypto_cleanup();
+    parties::log_shutdown();
+    parties::crash_reporter_shutdown();
     return 0;
 }

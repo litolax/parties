@@ -6,7 +6,7 @@
 #include <AMF/core/Plane.h>
 
 #include <parties/profiler.h>
-#include <cstdio>
+#include <parties/log.h>
 #include <cstring>
 
 namespace parties::encdec::amd {
@@ -53,13 +53,13 @@ bool AmfDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     AMF_RESULT res = factory_->CreateContext(&context_);
     if (res != AMF_OK || !context_) {
-        std::fprintf(stderr, "[AMF] Decoder CreateContext failed: %d\n", res);
+        LOG_ERROR("Decoder CreateContext failed: {}", (int)res);
         return false;
     }
 
     res = context_->InitDX11(nullptr);
     if (res != AMF_OK) {
-        std::fprintf(stderr, "[AMF] Decoder InitDX11 failed: %d\n", res);
+        LOG_ERROR("Decoder InitDX11 failed: {}", (int)res);
         context_->Release();
         context_ = nullptr;
         return false;
@@ -68,8 +68,8 @@ bool AmfDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     const wchar_t* comp_id = decoder_component_id(codec);
     res = factory_->CreateComponent(context_, comp_id, &decoder_);
     if (res != AMF_OK || !decoder_) {
-        std::fprintf(stderr, "[AMF] Decoder CreateComponent(%s) failed: %d\n",
-                     codec_name(codec), res);
+        LOG_ERROR("Decoder CreateComponent({}) failed: {}",
+                  codec_name(codec), (int)res);
         context_->Release();
         context_ = nullptr;
         return false;
@@ -83,8 +83,8 @@ bool AmfDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     res = decoder_->Init(amf::AMF_SURFACE_NV12, w, h);
     if (res != AMF_OK) {
-        std::fprintf(stderr, "[AMF] Decoder Init(%s, %ux%u) failed: %d\n",
-                     codec_name(codec), w, h, res);
+        LOG_ERROR("Decoder Init({}, {}x{}) failed: {}",
+                  codec_name(codec), w, h, (int)res);
         decoder_->Release();
         decoder_ = nullptr;
         context_->Release();
@@ -96,8 +96,8 @@ bool AmfDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     width_ = w;
     height_ = h;
 
-    std::fprintf(stderr, "[AMF] Initialized %s decoder (%ux%u)\n",
-                 codec_name(codec), w, h);
+    LOG_INFO("Initialized {} decoder ({}x{})",
+             codec_name(codec), w, h);
     initialized_ = true;
     return true;
 }
@@ -109,7 +109,7 @@ bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     amf::AMFBuffer* buffer = nullptr;
     AMF_RESULT res = context_->AllocBuffer(amf::AMF_MEMORY_HOST, len, &buffer);
     if (res != AMF_OK || !buffer) {
-        std::fprintf(stderr, "[AMF] AllocBuffer failed: %d\n", res);
+        LOG_ERROR("AllocBuffer failed: {}", (int)res);
         return false;
     }
 
@@ -120,7 +120,7 @@ bool AmfDecoder::decode(const uint8_t* data, size_t len, int64_t timestamp) {
     buffer->Release();
 
     if (res != AMF_OK && res != AMF_DECODER_NO_FREE_SURFACES) {
-        std::fprintf(stderr, "[AMF] Decoder SubmitInput failed: %d\n", res);
+        LOG_ERROR("Decoder SubmitInput failed: {}", (int)res);
         if (res == AMF_FAIL || res == AMF_NOT_INITIALIZED) {
             context_lost_ = true;
         }

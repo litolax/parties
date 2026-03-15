@@ -10,9 +10,14 @@ find_library(SPEEXDSP_LIBRARY speexdsp)
 if(NOT APPLE)
     find_package(D3D12MemoryAllocator CONFIG REQUIRED)
 
-    # Generate .rc with absolute icon path (llvm-rc resolves relative to build dir)
+    # Generate .rc with version info and icon
     file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/res/logo.ico" ICON_PATH)
+    set(RC_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+    set(RC_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+    set(RC_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+    set(RC_VERSION_STR "${PROJECT_VERSION}")
     configure_file(res/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+    configure_file(res/app.manifest "${CMAKE_CURRENT_BINARY_DIR}/app.manifest" COPYONLY)
 endif()
 
 # ── Cross-platform sources ────────────────────────────────────────────────────
@@ -94,6 +99,11 @@ add_executable(parties_client
     ${CLIENT_PLATFORM_SOURCES}
 )
 
+# Disable CMake's auto-generated manifest — we embed our own via app.rc
+if(NOT APPLE)
+    set_target_properties(parties_client PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+endif()
+
 # #embed dependencies — recompile when embedded files change
 file(GLOB EMBED_UI_RESOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/*.rml
@@ -123,13 +133,22 @@ target_include_directories(parties_client
         $<$<BOOL:${APPLE}>:${CMAKE_CURRENT_SOURCE_DIR}/../client-ios/Backends>
 )
 
-# Release: hide console (WINDOWS subsystem), Debug: keep console
-# set_target_properties(parties_client PROPERTIES
-#     WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>
-# )
-# target_link_options(parties_client PRIVATE
-#     $<$<NOT:$<CONFIG:Debug>>:/ENTRY:mainCRTStartup>
-# )
+# Retail: no console window on Windows
+if(NOT APPLE AND BUILD_IN_RETAIL)
+    target_link_options(parties_client PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+endif()
+
+if(APPLE)
+    set_target_properties(parties_client PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/res/Info.plist.in"
+        MACOSX_BUNDLE_BUNDLE_NAME "Parties Client"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.parties.client"
+        MACOSX_BUNDLE_COPYRIGHT "MIT License"
+    )
+endif()
 
 if(APPLE)
     target_link_libraries(parties_client
@@ -139,7 +158,7 @@ if(APPLE)
             rnnoise::rnnoise
             unofficial::sqlite3::sqlite3
             RmlUi::RmlUi
-            RmlUi::Debugger
+            $<$<NOT:$<BOOL:${BUILD_IN_RETAIL}>>:RmlUi::Debugger>
             ${SPEEXDSP_LIBRARY}
             "-framework Metal"
             "-framework MetalKit"
@@ -162,13 +181,17 @@ else()
             rnnoise::rnnoise
             unofficial::sqlite3::sqlite3
             RmlUi::RmlUi
-            RmlUi::Debugger
+            $<$<NOT:$<BOOL:${BUILD_IN_RETAIL}>>:RmlUi::Debugger>
             GPUOpen::D3D12MemoryAllocator
             ${SPEEXDSP_LIBRARY}
             d3d11 d3d12 dxgi d3dcompiler
             windowsapp
             dwmapi
     )
+endif()
+
+if(ENABLE_SENTRY AND NOT SENTRY_DSN_CLIENT STREQUAL "")
+    target_compile_definitions(parties_client PRIVATE "SENTRY_DSN_VALUE=\"${SENTRY_DSN_CLIENT}\"")
 endif()
 
 # Copy client exe to additional test folders for multi-instance testing (Windows only)

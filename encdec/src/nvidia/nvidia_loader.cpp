@@ -1,8 +1,8 @@
 // Dynamic loader for NVIDIA Video Codec SDK DLLs.
 #include "nvidia_loader.h"
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <windows.h>
 
 namespace parties::encdec::nvidia {
@@ -25,7 +25,7 @@ bool load_nvenc(NV_ENCODE_API_FUNCTION_LIST& funcs) {
         tried = true;
         mod = LoadLibraryA("nvEncodeAPI64.dll");
         if (!mod) {
-            std::fprintf(stderr, "[NVENC] nvEncodeAPI64.dll not found\n");
+            LOG_ERROR("nvEncodeAPI64.dll not found");
             return false;
         }
     }
@@ -33,7 +33,7 @@ bool load_nvenc(NV_ENCODE_API_FUNCTION_LIST& funcs) {
     using PFN_NvEncodeAPICreateInstance = NVENCSTATUS (NVENCAPI *)(NV_ENCODE_API_FUNCTION_LIST*);
     PFN_NvEncodeAPICreateInstance createInstance = nullptr;
     if (!load_sym(mod, "NvEncodeAPICreateInstance", createInstance)) {
-        std::fprintf(stderr, "[NVENC] NvEncodeAPICreateInstance not found\n");
+        LOG_ERROR("NvEncodeAPICreateInstance not found");
         return false;
     }
 
@@ -41,7 +41,7 @@ bool load_nvenc(NV_ENCODE_API_FUNCTION_LIST& funcs) {
     funcs.version = NV_ENCODE_API_FUNCTION_LIST_VER;
     NVENCSTATUS status = createInstance(&funcs);
     if (status != NV_ENC_SUCCESS) {
-        std::fprintf(stderr, "[NVENC] NvEncodeAPICreateInstance failed: %d\n", status);
+        LOG_ERROR("NvEncodeAPICreateInstance failed: {}", (int)status);
         return false;
     }
 
@@ -60,7 +60,7 @@ bool load_cuda(CudaApi& api) {
         tried = true;
         mod = LoadLibraryA("nvcuda.dll");
         if (!mod) {
-            std::fprintf(stderr, "[CUDA] nvcuda.dll not found\n");
+            LOG_ERROR("nvcuda.dll not found");
             return false;
         }
     }
@@ -78,13 +78,13 @@ bool load_cuda(CudaApi& api) {
     all_ok &= load_sym(mod, "cuMemFreeHost", api.cuMemFreeHost);
 
     if (!all_ok) {
-        std::fprintf(stderr, "[CUDA] Failed to load some CUDA functions\n");
+        LOG_ERROR("Failed to load some CUDA functions");
         return false;
     }
 
     CUresult res = api.cuInit(0);
     if (res != CUDA_SUCCESS) {
-        std::fprintf(stderr, "[CUDA] cuInit failed: %d\n", res);
+        LOG_ERROR("cuInit failed: {}", res);
         return false;
     }
 
@@ -103,7 +103,7 @@ bool load_cuvid(CuvidApi& api) {
         tried = true;
         mod = LoadLibraryA("nvcuvid.dll");
         if (!mod) {
-            std::fprintf(stderr, "[CUVID] nvcuvid.dll not found\n");
+            LOG_ERROR("nvcuvid.dll not found");
             return false;
         }
     }
@@ -120,7 +120,7 @@ bool load_cuvid(CuvidApi& api) {
     all_ok &= load_sym(mod, "cuvidParseVideoData", api.cuvidParseVideoData);
 
     if (!all_ok) {
-        std::fprintf(stderr, "[CUVID] Failed to load some CUVID functions\n");
+        LOG_ERROR("Failed to load some CUVID functions");
         return false;
     }
 

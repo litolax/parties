@@ -16,6 +16,13 @@ endif()
 
 option(ENABLE_TRACY "Enable Tracy profiler" ON)
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(BUILD_IN_RETAIL "Build for retail distribution (no debugger, no console)" OFF)
+if(BUILD_IN_RETAIL)
+    set(ENABLE_TRACY OFF CACHE BOOL "" FORCE)
+endif()
+option(ENABLE_SENTRY "Enable Sentry crash reporting" OFF)
+set(SENTRY_DSN_CLIENT "" CACHE STRING "Sentry DSN for the client (per-platform)")
+set(SENTRY_DSN_SERVER "" CACHE STRING "Sentry DSN for the server")
 if(ENABLE_ASAN)
     add_compile_options(-fsanitize=address)
     # Disable STL container annotations — vcpkg libs aren't ASAN-instrumented

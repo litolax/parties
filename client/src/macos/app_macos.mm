@@ -20,7 +20,7 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
-#ifdef RMLUI_DEBUG
+#ifndef PARTIES_RETAIL
 #include <RmlUi/Debugger.h>
 #endif
 
@@ -303,7 +303,7 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     _rmlContext->SetDensityIndependentPixelRatio(dpRatio);
     _metalView.rmlContext = _rmlContext;
 
-#ifdef RMLUI_DEBUG
+#ifndef PARTIES_RETAIL
     Rml::Debugger::Initialise(_rmlContext);
 #endif
 

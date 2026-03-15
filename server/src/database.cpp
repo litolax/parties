@@ -1,7 +1,7 @@
 #include <server/database.h>
 
 #include <sqlite3.h>
-#include <cstdio>
+#include <parties/log.h>
 #include <cstring>
 
 namespace parties::server {
@@ -14,8 +14,7 @@ Database::~Database() {
 
 bool Database::open(const std::string& path) {
     if (sqlite3_open(path.c_str(), &db_) != SQLITE_OK) {
-        std::fprintf(stderr, "[DB] Failed to open %s: %s\n",
-                     path.c_str(), sqlite3_errmsg(db_));
+        LOG_ERROR("Failed to open {}: {}", path, sqlite3_errmsg(db_));
         return false;
     }
 
@@ -24,12 +23,12 @@ bool Database::open(const std::string& path) {
     exec("PRAGMA foreign_keys=ON;");
 
     if (!create_schema()) {
-        std::fprintf(stderr, "[DB] Failed to create schema\n");
+        LOG_ERROR("Failed to create schema");
         close();
         return false;
     }
 
-    std::printf("[DB] Opened %s\n", path.c_str());
+    LOG_INFO("Opened database {}", path);
     return true;
 }
 
@@ -43,7 +42,7 @@ void Database::close() {
 bool Database::exec(const std::string& sql) {
     char* err = nullptr;
     if (sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, &err) != SQLITE_OK) {
-        std::fprintf(stderr, "[DB] SQL error: %s\n", err);
+        LOG_ERROR("SQL error: {}", err);
         sqlite3_free(err);
         return false;
     }

@@ -3,10 +3,11 @@
 #include <parties/net_common.h>
 #include <parties/quic_common.h>
 #include <parties/profiler.h>
+#include <parties/log.h>
+#include <parties/crash_reporter.h>
 #include <server/config.h>
 #include <server/server.h>
 
-#include <cstdio>
 #include <csignal>
 #include <atomic>
 
@@ -17,22 +18,28 @@ static void signal_handler(int) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef SENTRY_DSN_VALUE
+    parties::crash_reporter_init(SENTRY_DSN_VALUE);
+#else
+    parties::crash_reporter_init(nullptr);
+#endif
+    parties::log_init(parties::LogTarget::Server);
     TracySetThreadName("Main");
-    std::printf("%s Server v%s\n", parties::APP_NAME, parties::APP_VERSION);
+    LOG_INFO("{} Server v{}", parties::APP_NAME, parties::APP_VERSION);
 
     if (!parties::crypto_init()) {
-        std::fprintf(stderr, "Failed to initialize crypto\n");
+        LOG_ERROR("Failed to initialize crypto");
         return 1;
     }
 
     if (!parties::net_init()) {
-        std::fprintf(stderr, "Failed to initialize networking\n");
+        LOG_ERROR("Failed to initialize networking");
         parties::crypto_cleanup();
         return 1;
     }
 
     if (!parties::quic_init()) {
-        std::fprintf(stderr, "Failed to initialize QUIC\n");
+        LOG_ERROR("Failed to initialize QUIC");
         parties::net_cleanup();
         parties::crypto_cleanup();
         return 1;
@@ -43,13 +50,13 @@ int main(int argc, char* argv[]) {
     if (argc > 1) config_path = argv[1];
 
     auto config = parties::server::Config::load(config_path);
-    std::printf("Server name: %s\n", config.server_name.c_str());
-    std::printf("QUIC port: %u\n", config.port);
+    LOG_INFO("Server name: {}", config.server_name);
+    LOG_INFO("QUIC port: {}", config.port);
 
     // Start server
     parties::server::Server server;
     if (!server.start(config)) {
-        std::fprintf(stderr, "Failed to start server\n");
+        LOG_ERROR("Failed to start server");
         parties::net_cleanup();
         parties::crypto_cleanup();
         return 1;
@@ -59,7 +66,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    std::printf("Server running. Press Ctrl+C to stop.\n");
+    LOG_INFO("Server running. Press Ctrl+C to stop.");
 
     // Main loop — Server::run() processes messages in a non-blocking fashion
     while (g_running) {
@@ -70,5 +77,7 @@ int main(int argc, char* argv[]) {
     parties::quic_cleanup();
     parties::net_cleanup();
     parties::crypto_cleanup();
+    parties::log_shutdown();
+    parties::crash_reporter_shutdown();
     return 0;
 }

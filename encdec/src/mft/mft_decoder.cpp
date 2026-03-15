@@ -3,8 +3,8 @@
 #include <mfidl.h>
 #include <mferror.h>
 
-#include <cstdio>
 #include <cstring>
+#include <parties/log.h>
 #include <parties/profiler.h>
 
 using Microsoft::WRL::ComPtr;
@@ -32,7 +32,7 @@ bool MftDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftDecoder] MFStartup failed: 0x%08lx\n", hr);
+        LOG_ERROR("MFStartup failed: {:#010x}", hr);
         return false;
     }
 
@@ -50,7 +50,7 @@ bool MftDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
                    &input_info, nullptr, &activates, &count);
 
     if (FAILED(hr) || count == 0) {
-        std::fprintf(stderr, "[MftDecoder] No %s decoder found\n", name);
+        LOG_ERROR("No {} decoder found", name);
         if (activates) CoTaskMemFree(activates);
         return false;
     }
@@ -60,7 +60,7 @@ bool MftDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     CoTaskMemFree(activates);
 
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftDecoder] Activate %s decoder failed: 0x%08lx\n", name, hr);
+        LOG_ERROR("Activate {} decoder failed: {:#010x}", name, hr);
         return false;
     }
 
@@ -73,7 +73,7 @@ bool MftDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
 
     hr = mft_->SetInputType(0, in_type.Get(), 0);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[MftDecoder] SetInputType failed: 0x%08lx\n", hr);
+        LOG_ERROR("SetInputType failed: {:#010x}", hr);
         return false;
     }
 
@@ -98,7 +98,7 @@ bool MftDecoder::init(VideoCodecId codec, uint32_t width, uint32_t height) {
     }
 
     if (!output_set) {
-        std::fprintf(stderr, "[MftDecoder] No NV12 output type available\n");
+        LOG_ERROR("No NV12 output type available");
         return false;
     }
 

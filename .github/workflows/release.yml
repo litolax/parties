@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/parties-server
+
+jobs:
+  # ── Windows retail build ────────────────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Export GitHub Actions cache variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install LLVM 20
+        run: |
+          choco install llvm --version=22.1.1 -y
+          echo "LLVMInstallDir=C:\Program Files\LLVM" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install Strawberry Perl
+        run: choco install strawberryperl -y
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Configure retail build
+        run: |
+          cmake --preset retail `
+            -DENABLE_SENTRY=ON `
+            -DSENTRY_DSN_CLIENT="${{ secrets.SENTRY_DSN_WINDOWS }}" `
+            -DSENTRY_DSN_SERVER="${{ secrets.SENTRY_DSN_SERVER }}"
+
+      - name: Build
+        run: cmake --build --preset retail
+
+      - name: Upload client debug symbols to Sentry
+        run: |
+          npx -y @sentry/cli debug-files upload `
+            --org ${{ secrets.SENTRY_ORG }} `
+            --project ${{ secrets.SENTRY_PROJECT_WINDOWS }} `
+            build-retail/client/
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Upload server debug symbols to Sentry
+        run: |
+          npx -y @sentry/cli debug-files upload `
+            --org ${{ secrets.SENTRY_ORG }} `
+            --project ${{ secrets.SENTRY_PROJECT_SERVER }} `
+            build-retail/server/
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Upload Windows client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-client
+          path: build-retail/client/parties_client.exe
+
+      - name: Upload Windows server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-server
+          path: build-retail/server/parties_server.exe
+
+  # ── macOS retail build ──────────────────────────────────────────────────────
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Export GitHub Actions cache variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Configure retail build
+        run: |
+          cmake --preset macos-arm64-release \
+            -DBUILD_IN_RETAIL=ON \
+            -DENABLE_SENTRY=ON \
+            -DSENTRY_DSN_CLIENT="${{ secrets.SENTRY_DSN_MACOS }}"
+
+      - name: Build
+        run: cmake --build --preset macos-arm64-release
+
+      - name: Generate dSYM bundles
+        run: dsymutil build-macos-release/client/parties_client.app/Contents/MacOS/parties_client
+
+      - name: Upload client debug symbols to Sentry
+        run: |
+          npx -y @sentry/cli debug-files upload \
+            --org ${{ secrets.SENTRY_ORG }} \
+            --project ${{ secrets.SENTRY_PROJECT_MACOS }} \
+            build-macos-release/client/
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: build-macos-release/client/parties_client.app
+
+  # ── Linux Docker image ─────────────────────────────────────────────────────
+  linux-docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          build-args: |
+            SENTRY_DSN_SERVER=${{ secrets.SENTRY_DSN_SERVER }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Extract server binary for symbol upload
+        run: |
+          id=$(docker create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }})
+          docker cp "$id:/usr/local/bin/parties_server" ./parties_server
+          docker rm "$id"
+
+      - name: Upload server debug symbols to Sentry
+        run: |
+          npx -y @sentry/cli debug-files upload \
+            --org ${{ secrets.SENTRY_ORG }} \
+            --project ${{ secrets.SENTRY_PROJECT_SERVER }} \
+            ./parties_server
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  # ── GitHub Release ──────────────────────────────────────────────────────────
+  create-release:
+    needs: [windows, macos, linux-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows client
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows-client
+          path: dist/windows-client
+
+      - name: Download Windows server
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows-server
+          path: dist/windows-server
+
+      - name: Download macOS client
+        uses: actions/download-artifact@v4
+        with:
+          name: release-macos
+          path: dist/macos-client
+
+      - name: Package release archives
+        run: |
+          cd dist/windows-client && zip -r ../../parties-client-windows-${{ github.ref_name }}.zip . && cd ../..
+          cd dist/windows-server && zip -r ../../parties-server-windows-${{ github.ref_name }}.zip . && cd ../..
+          cd dist/macos-client && zip -r ../../parties-client-macos-${{ github.ref_name }}.zip . && cd ../..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            parties-client-windows-${{ github.ref_name }}.zip
+            parties-server-windows-${{ github.ref_name }}.zip
+            parties-client-macos-${{ github.ref_name }}.zip

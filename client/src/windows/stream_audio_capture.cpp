@@ -1,5 +1,6 @@
 #include <client/stream_audio_capture.h>
 #include <parties/profiler.h>
+#include <parties/log.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -12,7 +13,6 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-#include <cstdio>
 #include <cstring>
 #include <condition_variable>
 #include <mutex>
@@ -91,7 +91,7 @@ bool StreamAudioCapture::init(uint32_t target_pid) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
     if (!encoder_.init_encoder(kSampleRate, kChannels, 64000)) {
-        std::fprintf(stderr, "[StreamAudioCapture] Failed to init Opus encoder\n");
+        LOG_ERROR("Failed to init Opus encoder");
         return false;
     }
     encoder_initialized_ = true;
@@ -129,17 +129,17 @@ bool StreamAudioCapture::init(uint32_t target_pid) {
         &async_op);
 
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[StreamAudioCapture] ActivateAudioInterfaceAsync failed: 0x%08lX\n", hr);
+        LOG_ERROR("ActivateAudioInterfaceAsync failed: {:#010x}", static_cast<unsigned>(hr));
         return false;
     }
 
     if (!handler->wait(5000)) {
-        std::fprintf(stderr, "[StreamAudioCapture] Activation timed out\n");
+        LOG_ERROR("Activation timed out");
         return false;
     }
 
     if (FAILED(handler->result())) {
-        std::fprintf(stderr, "[StreamAudioCapture] Activation failed: 0x%08lX\n", handler->result());
+        LOG_ERROR("Activation failed: {:#010x}", static_cast<unsigned>(handler->result()));
         return false;
     }
 
@@ -159,13 +159,13 @@ bool StreamAudioCapture::init(uint32_t target_pid) {
     fmt->cbSize = 0;
     state->mix_format = fmt;
 
-    std::printf("[StreamAudioCapture] Requested format: %lu Hz, %d ch, %d bits (float)\n",
+    LOG_INFO("Requested format: {} Hz, {} ch, {} bits (float)",
                 fmt->nSamplesPerSec, fmt->nChannels, fmt->wBitsPerSample);
 
     // Create event for buffer-ready notification
     state->audio_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!state->audio_event) {
-        std::fprintf(stderr, "[StreamAudioCapture] CreateEvent failed\n");
+        LOG_ERROR("CreateEvent failed");
         delete state;
         return false;
     }
@@ -181,14 +181,14 @@ bool StreamAudioCapture::init(uint32_t target_pid) {
         nullptr);
 
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[StreamAudioCapture] IAudioClient::Initialize failed: 0x%08lX\n", hr);
+        LOG_ERROR("IAudioClient::Initialize failed: {:#010x}", static_cast<unsigned>(hr));
         delete state;
         return false;
     }
 
     hr = state->audio_client->SetEventHandle(state->audio_event);
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[StreamAudioCapture] SetEventHandle failed: 0x%08lX\n", hr);
+        LOG_ERROR("SetEventHandle failed: {:#010x}", static_cast<unsigned>(hr));
         delete state;
         return false;
     }
@@ -196,14 +196,14 @@ bool StreamAudioCapture::init(uint32_t target_pid) {
     hr = state->audio_client->GetService(__uuidof(IAudioCaptureClient),
                                           reinterpret_cast<void**>(state->capture_client.GetAddressOf()));
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[StreamAudioCapture] GetService(IAudioCaptureClient) failed: 0x%08lX\n", hr);
+        LOG_ERROR("GetService(IAudioCaptureClient) failed: {:#010x}", static_cast<unsigned>(hr));
         delete state;
         return false;
     }
 
     wasapi_ = state;
 
-    std::printf("[StreamAudioCapture] Loopback: %s PID %u (%lu Hz, %d ch)\n",
+    LOG_INFO("Loopback: {} PID {} ({} Hz, {} ch)",
                 target_pid != 0 ? "include" : "exclude-self",
                 target_pid != 0 ? target_pid : static_cast<uint32_t>(GetCurrentProcessId()),
                 state->mix_format->nSamplesPerSec, state->mix_format->nChannels);
@@ -224,7 +224,7 @@ bool StreamAudioCapture::start() {
 
     HRESULT hr = wasapi_->audio_client->Start();
     if (FAILED(hr)) {
-        std::fprintf(stderr, "[StreamAudioCapture] IAudioClient::Start failed: 0x%08lX\n", hr);
+        LOG_ERROR("IAudioClient::Start failed: {:#010x}", static_cast<unsigned>(hr));
         return false;
     }
 
