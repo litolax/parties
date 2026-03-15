@@ -279,23 +279,23 @@ if(APPLE AND ENABLE_SENTRY)
     target_compile_definitions(parties_client PRIVATE SENTRY_COCOA_ENABLED)
 
     # Sentry Cocoa contains Swift code — link Swift runtime libraries
-    execute_process(
-        COMMAND xcrun --show-sdk-path
-        OUTPUT_VARIABLE _SWIFT_SDK_PATH
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    execute_process(
-        COMMAND xcrun --find swiftc
-        OUTPUT_VARIABLE _SWIFTC_PATH
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    get_filename_component(_SWIFT_TOOLCHAIN "${_SWIFTC_PATH}" DIRECTORY)
-    get_filename_component(_SWIFT_TOOLCHAIN "${_SWIFT_TOOLCHAIN}" DIRECTORY)
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         set(_SWIFT_PLATFORM "iphoneos")
     else()
         set(_SWIFT_PLATFORM "macosx")
     endif()
+    execute_process(
+        COMMAND xcrun --sdk ${_SWIFT_PLATFORM} --show-sdk-path
+        OUTPUT_VARIABLE _SWIFT_SDK_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    execute_process(
+        COMMAND xcrun --sdk ${_SWIFT_PLATFORM} --find swiftc
+        OUTPUT_VARIABLE _SWIFTC_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    get_filename_component(_SWIFT_TOOLCHAIN "${_SWIFTC_PATH}" DIRECTORY)
+    get_filename_component(_SWIFT_TOOLCHAIN "${_SWIFT_TOOLCHAIN}" DIRECTORY)
     target_link_directories(parties_client PRIVATE
         "${_SWIFT_TOOLCHAIN}/lib/swift/${_SWIFT_PLATFORM}"
         "${_SWIFT_SDK_PATH}/usr/lib/swift"
