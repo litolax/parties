@@ -1318,6 +1318,7 @@ input.range slidertrack {
     height: 4dp;
     background-color: #2A3050;
     border-radius: 2dp;
+    cursor: pointer;
 }
 
 input.range sliderprogress {
@@ -1325,6 +1326,7 @@ input.range sliderprogress {
     background-color: #6EECD4;
     border-radius: 2dp;
     padding-right: 1dp;
+    cursor: pointer;
 }
 
 input.range sliderbar {
@@ -1333,6 +1335,7 @@ input.range sliderbar {
     background-color: #FFFFFF;
     border-radius: 7dp;
     margin-top: -5dp;
+    cursor: pointer;
 }
 
 input.range sliderbar:hover {
