@@ -278,6 +278,20 @@ void Server::handle_message(const IncomingMessage& msg) {
             }
         }
 
+        // Kick any existing sessions with the same identity
+        {
+            auto all = quic_.get_sessions();
+            for (auto& s : all) {
+                if (s->id != msg.session_id && s->authenticated &&
+                    s->public_key == pubkey) {
+                    std::printf("[Server] Kicking duplicate session %u for user '%s' (id=%u)\n",
+                                s->id, s->username.c_str(), s->user_id);
+                    on_client_disconnect(s->id);
+                    quic_.disconnect(s->id);
+                }
+            }
+        }
+
         // Auth success
         session->authenticated = true;
         session->user_id = user->id;
@@ -842,13 +856,20 @@ void Server::on_client_disconnect(uint32_t session_id) {
 	ZoneScopedN("Server::on_client_disconnect");
     auto session = quic_.get_session(session_id);
     if (session && session->authenticated && session->channel_id != 0) {
+        ChannelId ch = session->channel_id;
+
         // Clean up screen share if this user was sharing
-        stop_screen_share(session->channel_id, session->user_id);
+        stop_screen_share(ch, session->user_id);
         session->subscribed_sharer = 0;
+
+        // Mark session as no longer in channel (idempotent — prevents
+        // double broadcast if disconnect fires again from QUIC callback)
+        session->channel_id = 0;
+        session->authenticated = false;
 
         BinaryWriter writer;
         writer.write_u32(session->user_id);
-        writer.write_u32(session->channel_id);
+        writer.write_u32(ch);
 
         auto all = quic_.get_sessions();
         for (auto& s : all) {

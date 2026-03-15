@@ -410,6 +410,7 @@ void AppCore::on_disconnect_cleanup()
     audio_.stop();
     mixer_.clear();
     clear_all_sharers();
+    voice_last_active_.clear();
 
     model_.is_connected = false;
     model_.current_channel = 0;
@@ -513,7 +514,9 @@ void AppCore::watch_sharer(UserId id)
     net_.send_message(protocol::ControlMessageType::SCREEN_SHARE_VIEW,
                       reinterpret_cast<const uint8_t*>(&id32), 4);
     model_.viewing_sharer_id = static_cast<int>(id);
-    model_.dirty("viewing_sharer_id");
+    // Don't dirty yet — platform dirties viewing_sharer_id when the first
+    // decoded frame is displayed, so the video area appears with content
+    // instead of flashing a black frame.
 }
 
 void AppCore::stop_watching()
@@ -699,8 +702,11 @@ void AppCore::on_channel_list(const uint8_t* data, size_t len)
 
         auto it = old_users.find(ch.id);
         if (it != old_users.end()) {
-            ch.users      = std::move(it->second);
-            ch.user_count = static_cast<int>(ch.users.size());
+            ch.users = std::move(it->second);
+            // For our current channel, user list is authoritative;
+            // for other channels, trust the server's count
+            if (static_cast<uint32_t>(ch.id) == current_channel_)
+                ch.user_count = static_cast<int>(ch.users.size());
         }
         model_.channels.push_back(std::move(ch));
     }
@@ -789,6 +795,12 @@ void AppCore::on_user_joined(const uint8_t* data, size_t len)
 
     for (auto& ch : model_.channels) {
         if (ch.id == static_cast<int>(channel_id)) {
+            // Remove existing entry for this user (handles identity takeover / rejoin)
+            auto& ul = ch.users;
+            ul.erase(std::remove_if(ul.begin(), ul.end(),
+                [uid](const ChannelUser& cu) { return cu.id == static_cast<int>(uid); }),
+                ul.end());
+
             ChannelUser u;
             u.id   = static_cast<int>(uid);
             u.name = Rml::String(uname);
