@@ -127,6 +127,17 @@ static void drain_messages(NetClient& client) {
     }                                                             \
 } while(0)
 
+static bool wait_for_connect(NetClient& client, int timeout_ms = TIMEOUT_MS) {
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (client.is_connected()) return true;
+        if (client.connect_failed()) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
 // ── Crash handler ────────────────────────────────────────────────────────
 
 #ifdef _WIN32
@@ -239,6 +250,7 @@ int main() {
     // ── Client A: connect + auth identity ──
     LOG("[3/15] Client A connecting...\n");
     TEST_ASSERT(client_a.connect("127.0.0.1", TEST_PORT), "client A connect");
+    TEST_ASSERT(wait_for_connect(client_a), "client A wait for connect");
     LOG("[3/15] Client A connected\n");
 
     uint32_t user_a_id = 0;
@@ -277,6 +289,7 @@ int main() {
     // ── Client B: connect + register + auth ──
     LOG("[4/15] Client B connecting...\n");
     TEST_ASSERT(client_b.connect("127.0.0.1", TEST_PORT), "client B connect");
+    TEST_ASSERT(wait_for_connect(client_b), "client B wait for connect");
     LOG("[4/15] Client B connected\n");
 
     client_b.on_data_received = [&](const uint8_t* data, size_t len) {

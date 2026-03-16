@@ -42,7 +42,7 @@ public:
     std::function<void(const uint8_t*, size_t)> on_encoded_frame;
 
     // Mute/unmute
-    void set_muted(bool muted) { muted_ = muted; }
+    void set_muted(bool muted) { muted_ = muted; if (muted) transmitting_ = false; }
     bool is_muted() const { return muted_; }
 
     // Deafen
@@ -75,6 +75,9 @@ public:
 
     // Current mic input level (0..1, updated per frame)
     float voice_level() const { return voice_level_; }
+
+    // True when audio is actually being sent (VAD gate passed)
+    bool is_transmitting() const { return transmitting_; }
 
 private:
     static void capture_callback(ma_device* device, void* output,
@@ -142,6 +145,7 @@ private:
     std::atomic<bool> vad_enabled_{true};
     std::atomic<float> vad_threshold_{0.43f};
     std::atomic<float> voice_level_{0.0f};
+    std::atomic<bool>  transmitting_{false};
 
     // Normalization gain smoothing (used in audio callback)
     float current_gain_ = 1.0f;

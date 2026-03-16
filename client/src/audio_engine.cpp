@@ -366,10 +366,12 @@ void AudioEngine::process_capture(const float* input, ma_uint32 frame_count) {
                     vad_hold_frames_--;
                 } else {
                     // Below threshold and hold expired — don't encode
+                    transmitting_ = false;
                     capture_pos_ = 0;
                     continue;
                 }
             }
+            transmitting_ = true;
 
             // Append to encode buffer
             for (int i = 0; i < audio::FRAME_SIZE; i++)

@@ -308,16 +308,16 @@ void App::poll_hotkeys() {
         }
     }
 
-    // PTT polling
+    // PTT polling — only controls audio mute, does not touch model_.is_muted
+    // PTT is blocked when manually muted or deafened
     if (core_.model_.ptt_enabled && core_.model_.ptt_key != 0 && core_.current_channel_ != 0) {
+        bool blocked = core_.model_.is_muted || core_.model_.is_deafened;
         bool held = (GetAsyncKeyState(core_.model_.ptt_key) & 0x8000) != 0;
         auto now = std::chrono::steady_clock::now();
-        if (held) {
+        if (held && !blocked) {
             ptt_held_ = true;
             if (core_.audio_.is_muted()) {
                 core_.audio_.set_muted(false);
-                core_.model_.is_muted = false;
-                core_.model_.dirty("is_muted");
             }
         } else if (ptt_held_) {
             ptt_held_ = false;
@@ -328,14 +328,12 @@ void App::poll_hotkeys() {
                 now - ptt_release_time_).count();
             if (elapsed >= static_cast<int64_t>(core_.model_.ptt_delay)) {
                 core_.audio_.set_muted(true);
-                core_.model_.is_muted = true;
-                core_.model_.dirty("is_muted");
             }
         }
     }
 
     // Mute toggle hotkey (edge-triggered)
-    if (core_.model_.mute_key != 0 && !core_.model_.ptt_enabled && core_.current_channel_ != 0) {
+    if (core_.model_.mute_key != 0 && core_.current_channel_ != 0) {
         bool held = (GetAsyncKeyState(core_.model_.mute_key) & 0x8000) != 0;
         if (held && !mute_key_held_) {
             if (core_.model_.on_toggle_mute) core_.model_.on_toggle_mute();

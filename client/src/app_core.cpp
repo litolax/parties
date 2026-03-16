@@ -367,10 +367,13 @@ void AppCore::finish_connect()
 {
     std::string fp = net_.get_server_fingerprint();
 
-    // On TLS 1.3 session resumption (0-RTT), no certificate is exchanged
-    // (PSK authentication), so the fingerprint is empty. The server accepted
-    // our session ticket, confirming it's the same server — skip TOFU check.
-    if (!fp.empty()) {
+    // On TLS 1.3 session resumption (0-RTT / PSK), no certificate is exchanged,
+    // so the fingerprint is empty. The session ticket is scoped to the server
+    // that issued it, so a successful resumption confirms identity. We already
+    // have the fingerprint stored in the TOFU database from the initial handshake.
+    if (fp.empty()) {
+        // PSK resumption — server already trusted (ticket wouldn't exist otherwise)
+    } else {
         auto result = settings_.check_fingerprint(server_host_, server_port_, fp);
 
         if (result == Settings::TofuResult::Mismatch) {
@@ -1043,7 +1046,7 @@ void AppCore::update_speaking_state()
     auto levels = mixer_.get_user_levels();
     bool changed = false;
 
-    bool self_active = !model_.is_muted && audio_.voice_level() > 0.001f;
+    bool self_active = !model_.is_muted && audio_.is_transmitting();
     if (self_active) voice_last_active_[user_id_] = now;
 
     for (auto& ch : model_.channels) {
@@ -1056,7 +1059,7 @@ void AppCore::update_speaking_state()
                 active_now = self_active;
             } else {
                 auto it = levels.find(uid);
-                active_now = (it != levels.end() && it->second > 0.001f);
+                active_now = (it != levels.end() && it->second > 0.0f);
             }
             if (user.muted || user.deafened) active_now = false;
 
@@ -1135,11 +1138,11 @@ void AppCore::setup_model_callbacks()
     model_.on_leave_channel = [this]()       { leave_channel(); };
 
     model_.on_toggle_mute = [this]() {
-        if (model_.ptt_enabled) return;
-        bool muted = !audio_.is_muted();
-        audio_.set_muted(muted);
+        bool muted = !model_.is_muted;
         model_.is_muted = muted;
         model_.dirty("is_muted");
+        // Effective audio mute: manually muted, or deafened, or PTT idle
+        audio_.set_muted(muted || model_.is_deafened);
         for (auto& ch : model_.channels)
             for (auto& u : ch.users)
                 if (u.id == static_cast<int>(user_id_)) u.muted = muted;
@@ -1150,10 +1153,17 @@ void AppCore::setup_model_callbacks()
     };
 
     model_.on_toggle_deafen = [this]() {
-        bool deafened = !audio_.is_deafened();
+        bool deafened = !model_.is_deafened;
         audio_.set_deafened(deafened);
         model_.is_deafened = deafened;
         model_.dirty("is_deafened");
+        // Deafen implies mute at the audio level
+        if (deafened) {
+            audio_.set_muted(true);
+        } else {
+            // Restore: only unmute audio if not manually muted (and not PTT-idle)
+            audio_.set_muted(model_.is_muted);
+        }
         for (auto& ch : model_.channels)
             for (auto& u : ch.users)
                 if (u.id == static_cast<int>(user_id_)) u.deafened = deafened;
@@ -1189,7 +1199,9 @@ void AppCore::setup_model_callbacks()
         model_.ptt_enabled = !model_.ptt_enabled;
         model_.dirty("ptt_enabled");
         settings_.set_pref("audio.ptt", model_.ptt_enabled ? "1" : "0");
-        if (model_.ptt_enabled) { audio_.set_muted(true); model_.is_muted = true; model_.dirty("is_muted"); }
+        // PTT on: start with mic muted (key not held yet)
+        // PTT off: restore audio mute to match manual mute state
+        audio_.set_muted(model_.is_muted || model_.is_deafened || model_.ptt_enabled);
     };
     model_.on_ptt_bind         = [this]() { model_.ptt_binding = true; model_.dirty("ptt_binding"); };
     model_.on_ptt_delay_changed = [this](float d) { save_pref_debounced("audio.ptt_delay", std::to_string(static_cast<int>(d))); };
