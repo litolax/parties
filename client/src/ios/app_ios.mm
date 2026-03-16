@@ -128,6 +128,10 @@ using namespace parties::protocol;
     uint32_t                _streamWidth;
     uint32_t                _streamHeight;
     bool                    _streamFullscreen;
+
+    // FPS counter
+    uint32_t _fpsFrameCount;
+    std::chrono::steady_clock::time_point _fpsLastUpdate;
 }
 
 // ── View setup ───────────────────────────────────────────────────────────────
@@ -651,6 +655,26 @@ using namespace parties::protocol;
     if (_levelMeter && _core.model_.is_connected) {
         _levelMeter->SetLevel(_core.audio_.voice_level());
         _levelMeter->SetThreshold(_core.model_.vad_threshold);
+    }
+
+    // Update FPS + ping in titlebar (once per second)
+    _fpsFrameCount++;
+    auto now_fps = std::chrono::steady_clock::now();
+    float elapsed_fps = std::chrono::duration<float>(now_fps - _fpsLastUpdate).count();
+    if (elapsed_fps >= 1.0f) {
+        int fps = static_cast<int>(_fpsFrameCount / elapsed_fps);
+        _fpsFrameCount = 0;
+        _fpsLastUpdate = now_fps;
+        if (_doc) {
+            if (auto* elem = _doc->GetElementById("titlebar-fps"))
+                elem->SetInnerRML(Rml::String(std::to_string(fps) + " fps"));
+            if (auto* elem = _doc->GetElementById("titlebar-ping")) {
+                if (_core.model_.is_connected)
+                    elem->SetInnerRML(Rml::String(std::to_string(_core.model_.ping_ms) + " ms"));
+                else
+                    elem->SetInnerRML("");
+            }
+        }
     }
 
     MTLRenderPassDescriptor* pass = view.currentRenderPassDescriptor;

@@ -65,6 +65,7 @@ public:
     int         role_                 = 3;
     std::string server_host_;
     uint16_t    server_port_          = 7800;
+    std::string server_password_;
     int         connecting_server_id_ = 0;
     ChannelId   current_channel_      = 0;
     ChannelKey  channel_key_{};

@@ -339,6 +339,7 @@ void AppCore::do_connect()
     }
 
     username_ = server_model_.login_username;
+    server_password_ = std::string(server_model_.login_password);
     server_model_.login_error = "";
     server_model_.dirty("login_error");
 
@@ -433,9 +434,14 @@ void AppCore::send_auth_identity()
     writer.write_string(username_);
     writer.write_u64(now);
     writer.write_bytes(sig.data(), sig.size());
+    writer.write_string(std::string(server_model_.login_password));
 
     net_.send_message(protocol::ControlMessageType::AUTH_IDENTITY,
                       writer.data().data(), writer.data().size());
+
+    // Clear password from memory after sending
+    server_model_.login_password.clear();
+    server_model_.dirty("login_password");
 }
 
 void AppCore::on_disconnect_cleanup()
@@ -443,6 +449,7 @@ void AppCore::on_disconnect_cleanup()
     authenticated_ = false;
     current_channel_ = 0;
     channel_key_ = {};
+    server_password_.clear();
     viewing_sharer_ = 0;
     awaiting_keyframe_ = false;
     video_frame_number_ = 0;
@@ -685,7 +692,8 @@ void AppCore::on_auth_response(const uint8_t* data, size_t len)
     authenticated_ = true;
 
     settings_.save_server(server_name, server_host_, server_port_,
-                          net_.get_server_fingerprint(), username_);
+                          net_.get_server_fingerprint(), username_, server_password_);
+    server_password_.clear();
     refresh_server_list();
 
     if (bridge_.on_authenticated) bridge_.on_authenticated();
@@ -1458,11 +1466,13 @@ void AppCore::setup_server_model_callbacks()
                 server_host_ = srv.host;
                 server_port_ = static_cast<uint16_t>(srv.port);
                 server_model_.login_username = Rml::String(srv.last_username);
+                server_model_.login_password = Rml::String(srv.password);
                 server_model_.login_error    = "";
                 server_model_.login_status   = Rml::String(
                     srv.name + " - " + srv.host + ":" + std::to_string(srv.port));
                 server_model_.show_login = true;
-                server_model_.dirty("login_username"); server_model_.dirty("login_error");
+                server_model_.dirty("login_username"); server_model_.dirty("login_password");
+                server_model_.dirty("login_error");
                 server_model_.dirty("login_status");   server_model_.dirty("show_login");
                 break;
             }

@@ -72,6 +72,7 @@ bool Settings::create_schema() {
             port          INTEGER NOT NULL DEFAULT 7800,
             fingerprint   TEXT NOT NULL DEFAULT '',
             last_username TEXT NOT NULL DEFAULT '',
+            password      TEXT NOT NULL DEFAULT '',
             UNIQUE(host, port)
         );
 
@@ -89,7 +90,12 @@ bool Settings::create_schema() {
         );
     )SQL";
 
-    return exec(schema);
+    if (!exec(schema)) return false;
+
+    // Migration: add password column to existing databases
+    exec("ALTER TABLE saved_servers ADD COLUMN password TEXT NOT NULL DEFAULT ''");
+
+    return true;
 }
 
 // --- Identity ---
@@ -211,12 +217,14 @@ bool Settings::trust_fingerprint(const std::string& host, int port,
 // --- Saved servers ---
 
 bool Settings::save_server(const std::string& name, const std::string& host, int port,
-                           const std::string& fingerprint, const std::string& last_username) {
+                           const std::string& fingerprint, const std::string& last_username,
+                           const std::string& password) {
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "INSERT INTO saved_servers (name, host, port, fingerprint, last_username) "
-                      "VALUES (?, ?, ?, ?, ?) "
+    const char* sql = "INSERT INTO saved_servers (name, host, port, fingerprint, last_username, password) "
+                      "VALUES (?, ?, ?, ?, ?, ?) "
                       "ON CONFLICT(host, port) DO UPDATE SET "
-                      "name=excluded.name, fingerprint=excluded.fingerprint, last_username=excluded.last_username";
+                      "name=excluded.name, fingerprint=excluded.fingerprint, "
+                      "last_username=excluded.last_username, password=excluded.password";
 
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
         return false;
@@ -226,6 +234,7 @@ bool Settings::save_server(const std::string& name, const std::string& host, int
     sqlite3_bind_int(stmt, 3, port);
     sqlite3_bind_text(stmt, 4, fingerprint.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 5, last_username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, password.c_str(), -1, SQLITE_TRANSIENT);
 
     bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
@@ -235,7 +244,7 @@ bool Settings::save_server(const std::string& name, const std::string& host, int
 std::vector<SavedServer> Settings::get_saved_servers() {
     std::vector<SavedServer> result;
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT id, name, host, port, fingerprint, last_username "
+    const char* sql = "SELECT id, name, host, port, fingerprint, last_username, password "
                       "FROM saved_servers ORDER BY name";
 
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -249,6 +258,8 @@ std::vector<SavedServer> Settings::get_saved_servers() {
         s.port = sqlite3_column_int(stmt, 3);
         s.fingerprint = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         s.last_username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        auto pw = sqlite3_column_text(stmt, 6);
+        s.password = pw ? reinterpret_cast<const char*>(pw) : "";
         result.push_back(std::move(s));
     }
 

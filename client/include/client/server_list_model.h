@@ -41,6 +41,7 @@ public:
     // Login overlay
     bool show_login = false;
     Rml::String login_username;
+    Rml::String login_password;
     Rml::String login_error;
     Rml::String login_status;
 

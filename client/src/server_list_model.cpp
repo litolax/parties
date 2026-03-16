@@ -35,6 +35,7 @@ bool ServerListModel::init(Rml::Context* context) {
     ctor.Bind("edit_error",       &edit_error);
     ctor.Bind("show_login",       &show_login);
     ctor.Bind("login_username",   &login_username);
+    ctor.Bind("login_password",   &login_password);
     ctor.Bind("login_error",      &login_error);
     ctor.Bind("login_status",     &login_status);
     ctor.Bind("connected_server_id", &connected_server_id);
@@ -101,9 +102,11 @@ bool ServerListModel::init(Rml::Context* context) {
             show_login = false;
             login_error = "";
             login_status = "";
+            login_password = "";
             dirty("show_login");
             dirty("login_error");
             dirty("login_status");
+            dirty("login_password");
             if (on_cancel_login) on_cancel_login();
         });
 

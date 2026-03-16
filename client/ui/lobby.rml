@@ -56,7 +56,7 @@
                 <div class="home-grid">
                     <div data-for="srv : servers">
                         <div class="party-card"
-                             data-event-click="server_mousedown(srv.id)">
+                             data-event-mousedown="server_mousedown(srv.id)">
                             <div class="party-card-icon-wrap">
                                 <gradient_circle class="party-card-gradient" data-attr-seed="srv.name" />
                                 <span class="party-card-initials">{{ srv.initials }}</span>
@@ -598,6 +598,9 @@
 
             <div class="label">Display Name</div>
             <input type="text" data-value="login_username" />
+
+            <div class="label">Server Password</div>
+            <input type="password" class="password" data-value="login_password" />
 
             <div class="error-text" data-if="login_error != ''">{{ login_error }}</div>
 

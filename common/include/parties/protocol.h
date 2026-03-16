@@ -12,7 +12,7 @@ constexpr uint16_t PROTOCOL_VERSION = 1;
 
 enum class ControlMessageType : uint16_t {
     // Client -> Server
-    AUTH_IDENTITY         = 0x0001,  // [protocol_version(2)][pubkey(32)][display_name][timestamp(8)][signature(64)]
+    AUTH_IDENTITY         = 0x0001,  // [protocol_version(2)][pubkey(32)][display_name][timestamp(8)][signature(64)][password]
     CHANNEL_JOIN          = 0x0002,
     CHANNEL_LEAVE         = 0x0003,
     KEEPALIVE_PING        = 0x0004,

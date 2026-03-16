@@ -241,6 +241,19 @@ void Server::handle_message(const IncomingMessage& msg) {
             break;
         }
 
+        // Read optional password (appended after signature)
+        std::string client_password;
+        if (!reader.error() && reader.remaining() > 0)
+            client_password = reader.read_string();
+
+        // Verify server password if configured
+        if (!config_.server_password.empty()) {
+            if (client_password != config_.server_password) {
+                send_error(msg.session_id, "Incorrect server password");
+                break;
+            }
+        }
+
         Fingerprint fp = parties::public_key_fingerprint(pubkey);
         LOG_INFO("Auth from session {}: name='{}' fp={}", msg.session_id, display_name, fp);
 

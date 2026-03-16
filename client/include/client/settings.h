@@ -17,6 +17,7 @@ struct SavedServer {
     int         port = 7800;
     std::string fingerprint;   // TOFU cert fingerprint
     std::string last_username;
+    std::string password;
 };
 
 struct Identity {
@@ -50,7 +51,8 @@ public:
 
     // --- Saved servers ---
     bool save_server(const std::string& name, const std::string& host, int port,
-                     const std::string& fingerprint, const std::string& last_username);
+                     const std::string& fingerprint, const std::string& last_username,
+                     const std::string& password = "");
     std::vector<SavedServer> get_saved_servers();
     bool delete_server(int id);
 

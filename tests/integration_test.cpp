@@ -255,11 +255,7 @@ int main() {
 
     uint32_t user_a_id = 0;
     {
-        BinaryWriter w;
-        w.write_bytes(pk_a.data(), 32);
-        w.write_string("test_user_a");
         auto now = static_cast<uint64_t>(std::time(nullptr));
-        w.write_u64(now);
 
         // Build message to sign: pubkey + display_name + timestamp
         BinaryWriter sign_buf;
@@ -269,7 +265,15 @@ int main() {
         Signature sig_a{};
         TEST_ASSERT(ed25519_sign(sign_buf.data().data(), sign_buf.data().size(),
                     sk_a, pk_a, sig_a), "client A sign");
+
+        // AUTH_IDENTITY: [version(2)][pubkey(32)][name][timestamp(8)][sig(64)][password]
+        BinaryWriter w;
+        w.write_u16(protocol::PROTOCOL_VERSION);
+        w.write_bytes(pk_a.data(), 32);
+        w.write_string("test_user_a");
+        w.write_u64(now);
         w.write_bytes(sig_a.data(), 64);
+        w.write_string("");  // no password
 
         TEST_ASSERT(client_a.send_message(ControlMessageType::AUTH_IDENTITY,
                     w.data().data(), w.data().size()), "client A send auth");
@@ -303,11 +307,7 @@ int main() {
 
     uint32_t user_b_id = 0;
     {
-        BinaryWriter w;
-        w.write_bytes(pk_b.data(), 32);
-        w.write_string("test_user_b");
         auto now = static_cast<uint64_t>(std::time(nullptr));
-        w.write_u64(now);
 
         BinaryWriter sign_buf;
         sign_buf.write_bytes(pk_b.data(), 32);
@@ -316,7 +316,15 @@ int main() {
         Signature sig_b{};
         TEST_ASSERT(ed25519_sign(sign_buf.data().data(), sign_buf.data().size(),
                     sk_b, pk_b, sig_b), "client B sign");
+
+        // AUTH_IDENTITY: [version(2)][pubkey(32)][name][timestamp(8)][sig(64)][password]
+        BinaryWriter w;
+        w.write_u16(protocol::PROTOCOL_VERSION);
+        w.write_bytes(pk_b.data(), 32);
+        w.write_string("test_user_b");
+        w.write_u64(now);
         w.write_bytes(sig_b.data(), 64);
+        w.write_string("");  // no password
 
         TEST_ASSERT(client_b.send_message(ControlMessageType::AUTH_IDENTITY,
                     w.data().data(), w.data().size()), "client B send auth");
