@@ -51,4 +51,4 @@ See [docs/protocol.md](docs/protocol.md) for the full protocol specification.
 
 This project is licensed under the [MIT License](LICENSE).
 
-All dependencies (OpenSSL, MsQuic, Opus, RNNoise, etc.) use MIT/Apache/BSD-compatible licenses.
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for a full list of third-party dependencies and their licenses.
