@@ -47,14 +47,14 @@ jobs:
 
       - name: Upload client artifact
         if: matrix.preset == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parties-client-windows
           path: build-release/client/parties_client.exe
 
       - name: Upload server artifact
         if: matrix.preset == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parties-server-windows
           path: build-release/server/parties_server.exe
@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload client artifact
         if: matrix.preset == 'macos-arm64-release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parties-client-macos
           path: build-macos-release/client/parties_client.app
@@ -128,7 +128,7 @@ jobs:
           ./build-linux/tests/parties_integration_test
 
       - name: Upload server artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parties-server-linux
           path: build-linux/server/parties_server
