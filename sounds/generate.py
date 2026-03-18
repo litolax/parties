@@ -251,6 +251,30 @@ SOUNDS = {
             (0, E5, 35, 100),
         ],
     },
+
+    # ── Server Connected: Warm ascending chord (Vibraphone) ─────
+    # C4 -> E4 -> G4 -> C5 -> E5  — grand, welcoming arrival
+    'parties-server-connected': {
+        'program': VIBRAPHONE,
+        'notes': [
+            (0,   C4, 65, 180),
+            (80,  E4, 75, 180),
+            (160, G4, 85, 200),
+            (240, C5, 95, 250),
+            (320, E5, 90, 300),
+        ],
+    },
+
+    # ── Server Disconnected: Descending fade (Vibraphone) ───────
+    # E5 -> C5 -> G4  — soft, calm departure
+    'parties-server-disconnected': {
+        'program': VIBRAPHONE,
+        'notes': [
+            (0,   E5, 70, 200),
+            (110, C5, 55, 200),
+            (220, G4, 40, 250),
+        ],
+    },
 }
 
 
