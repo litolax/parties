@@ -20,6 +20,8 @@ public:
         LeaveChannel,
         UserJoined,
         UserLeft,
+        ServerConnected,
+        ServerDisconnected,
         Count_
     };
 

@@ -390,11 +390,11 @@ int main(int argc, char* argv[]) {
 
         // When minimized, no rendering occurs and the vsync wait is skipped,
         // so throttle the loop to avoid spinning the CPU.
-        if (app.ui_manager()->is_minimized()) {
+        if (app.ui_manager()->is_minimized())
             Sleep(16);
-            continue;
-        }
 
+        // Always tick even when minimized: processes network messages so that
+        // sounds (user joined/left, etc.) play regardless of window state.
         app.update();
     }
 

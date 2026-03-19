@@ -93,15 +93,21 @@ public:
     // Push-to-talk
     bool ptt_enabled = false;
     int ptt_key = 0;                // Win32 virtual key code (0 = not set)
+    int ptt_key2 = 0;               // optional second regular key held in combo (0 = none)
+    int ptt_mods = 0;               // modifier bitmask: 1=Ctrl 2=Shift 4=Alt
     Rml::String ptt_key_name;       // display name for UI
     bool ptt_binding = false;        // true when waiting for key press
     float ptt_delay = 0.0f;         // release delay in ms (0-1000, step 50)
 
     // Global hotkeys
     int mute_key = 0;               // Toggle mute hotkey (0 = not set)
+    int mute_key2 = 0;
+    int mute_mods = 0;
     Rml::String mute_key_name;
     bool mute_binding = false;
     int deafen_key = 0;             // Toggle deafen hotkey (0 = not set)
+    int deafen_key2 = 0;
+    int deafen_mods = 0;
     Rml::String deafen_key_name;
     bool deafen_binding = false;
 
@@ -144,6 +150,12 @@ public:
     // Create channel form
     bool show_create_channel = false;
     Rml::String new_channel_name;
+
+    // Rename channel form
+    bool show_rename_channel = false;
+    int rename_channel_id = 0;
+    Rml::String rename_channel_name;      // current name (display only)
+    Rml::String new_rename_channel_name;  // input field
 
     // Admin feedback
     Rml::String admin_message;
@@ -201,6 +213,7 @@ public:
     // Admin
     std::function<void()>      on_create_channel;
     std::function<void(int)>   on_delete_channel;
+    std::function<void()>      on_rename_channel;
     std::function<void(int, std::string, int)> on_show_user_menu;    // (user_id, name, role)
     std::function<void(int, std::string)>      on_show_channel_menu; // (channel_id, name)
 

@@ -33,6 +33,12 @@ static constexpr unsigned char wav_join_other[] = {
 static constexpr unsigned char wav_leave_other[] = {
     #embed "../../sounds/parties-leave-other.wav"
 };
+static constexpr unsigned char wav_server_connected[] = {
+    #embed "../../sounds/parties-server-connected.wav"
+};
+static constexpr unsigned char wav_server_disconnected[] = {
+    #embed "../../sounds/parties-server-disconnected.wav"
+};
 
 // Decode 16-bit PCM WAV to float samples.
 // Scans for "data" subchunk to handle varying header sizes.
@@ -80,6 +86,10 @@ SoundPlayer::SoundPlayer() {
         decode_wav(wav_join_other, sizeof(wav_join_other));
     sounds_[static_cast<size_t>(Effect::UserLeft)].samples =
         decode_wav(wav_leave_other, sizeof(wav_leave_other));
+    sounds_[static_cast<size_t>(Effect::ServerConnected)].samples =
+        decode_wav(wav_server_connected, sizeof(wav_server_connected));
+    sounds_[static_cast<size_t>(Effect::ServerDisconnected)].samples =
+        decode_wav(wav_server_disconnected, sizeof(wav_server_disconnected));
 }
 
 SoundPlayer::~SoundPlayer() {
