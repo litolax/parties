@@ -1,4 +1,7 @@
 #include <client/app_core.h>
+#ifdef _WIN32
+#include <client/auto_updater.h>
+#endif
 #include <parties/protocol.h>
 #include <parties/serialization.h>
 #include <parties/crypto.h>
@@ -108,11 +111,20 @@ bool AppCore::init(const std::string& settings_path, PlatformBridge bridge, Rml:
     audio_.init();
     stream_audio_player_.init();
 
+#ifdef _WIN32
+    updater_ = std::make_unique<AutoUpdater>();
+    updater_->start();
+#endif
+
     return true;
 }
 
 void AppCore::shutdown()
 {
+#ifdef _WIN32
+    if (updater_) updater_->stop();
+    updater_.reset();
+#endif
     net_.disconnect();
     audio_.stop();
     stream_audio_player_.shutdown();
@@ -130,6 +142,22 @@ void AppCore::tick()
     process_server_messages();
     update_speaking_state();
     flush_pending_prefs();
+
+#ifdef _WIN32
+    if (updater_ && updater_->poll()) {
+        auto s = updater_->state();
+        model_.update_available  = (s == AutoUpdater::State::UpdateAvailable
+                                 || s == AutoUpdater::State::Downloading
+                                 || s == AutoUpdater::State::ReadyToInstall);
+        model_.update_downloading = (s == AutoUpdater::State::Downloading);
+        model_.update_ready       = (s == AutoUpdater::State::ReadyToInstall);
+        model_.update_version     = Rml::String("v") + updater_->latest_version().c_str();
+        model_.dirty("update_available");
+        model_.dirty("update_downloading");
+        model_.dirty("update_ready");
+        model_.dirty("update_version");
+    }
+#endif
 
     // Send keepalive ping every 2 seconds while connected
     if (authenticated_) {
@@ -1287,6 +1315,18 @@ void AppCore::setup_model_callbacks()
     model_.on_test_notification_sound = [this]() {
         if (bridge_.play_sound) bridge_.play_sound(SoundPlayer::Effect::UserJoined);
     };
+
+#ifdef _WIN32
+    model_.on_apply_update = [this]() {
+        if (!updater_) return;
+        auto s = updater_->state();
+        if (s == AutoUpdater::State::UpdateAvailable) {
+            updater_->download();
+        } else if (s == AutoUpdater::State::ReadyToInstall) {
+            updater_->apply_and_restart();
+        }
+    };
+#endif
 
     // Admin operations
     model_.on_create_channel = [this]() {

@@ -13,6 +13,7 @@
       "name": "spdlog",
       "default-features": false
     },
+    "rapidjson",
     "sqlite3",
     "toml11",
     {

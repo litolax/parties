@@ -72,6 +72,47 @@ body {
     font-weight: bold;
 }
 
+/* ── Update pill in titlebar ────────────────────────── */
+
+.titlebar-update {
+    display: block;
+    position: absolute;
+    top: 4dp;
+    left: 120dp;
+    background-color: #3B82F6;
+    border-radius: 4dp;
+    padding: 2dp 8dp;
+    z-index: 10;
+    window-action: none;
+}
+
+.titlebar-update:hover {
+    background-color: #22C55E;
+}
+
+.titlebar-update.downloading {
+    background-color: #1E40AF;
+}
+
+.titlebar-update.downloading:hover {
+    background-color: #1E40AF;
+}
+
+.titlebar-update.ready {
+    background-color: #22C55E;
+}
+
+.titlebar-update.ready:hover {
+    background-color: #4ADE80;
+}
+
+.update-pill-text {
+    display: inline;
+    color: #FFFFFF;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
 .titlebar-stats {
     display: flex;
     flex-direction: row;

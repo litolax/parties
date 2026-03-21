@@ -41,10 +41,19 @@
     <div class="app-content" data-model="lobby"
          data-class-mobile-content="mobile_show_content">
 
+    <!-- Update pill (absolutely positioned over titlebar) -->
+    <div class="titlebar-update" data-if="update_available"
+         data-event-click="apply_update"
+         data-class-downloading="update_downloading"
+         data-class-ready="update_ready">
+        <span class="update-pill-text" data-if="update_ready == false">Update {{ update_version }}</span>
+        <span class="update-pill-text" data-if="update_ready">Restart to update</span>
+    </div>
+
     <!-- ============================================================
          HOME SCREEN — full-screen party tiles (when not connected)
          ============================================================ -->
-    <div class="home-screen" data-model="lobby" data-if="is_connected == false">
+    <div class="home-screen" data-if="is_connected == false">
         <div class="home-inner" data-model="serverlist">
             <!-- Party grid content -->
             <div class="home-content">

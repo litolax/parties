@@ -132,6 +132,12 @@ public:
     int share_codec = 0;           // 0=AV1, 1=H.264
     int share_scale = 0;           // 0=Source, 1=x0.75, 2=x0.5, 3=x0.25
 
+    // Auto-update
+    bool update_available = false;
+    bool update_downloading = false;
+    bool update_ready = false;
+    Rml::String update_version;
+
     // Admin / permissions
     int my_role = 3;                       // current user's role (0=Owner..3=User)
     bool can_manage_channels = false;      // derived from role
@@ -202,6 +208,9 @@ public:
     std::function<void()>      on_stop_watching;
     std::function<void(float)> on_stream_volume_changed;
     std::function<void()>      on_stream_tap_fullscreen;  // iOS: single tap toggles fullscreen
+
+    // Auto-update
+    std::function<void()>      on_apply_update;
 
     // Identity
     std::function<void()>      on_show_seed_phrase;

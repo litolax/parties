@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -133,6 +134,10 @@ private:
     std::chrono::steady_clock::time_point ping_sent_at_{};
     std::chrono::steady_clock::time_point ping_last_send_{};
     bool ping_pending_ = false;
+
+#ifdef _WIN32
+    std::unique_ptr<class AutoUpdater> updater_;
+#endif
 
     void on_auth_response(const uint8_t* data, size_t len);
     void on_channel_list(const uint8_t* data, size_t len);

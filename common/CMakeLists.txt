@@ -20,6 +20,7 @@ target_sources(parties_common PRIVATE src/quic_common.cpp)
 target_include_directories(parties_common
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/generated
 )
 
 if(ENABLE_TRACY)

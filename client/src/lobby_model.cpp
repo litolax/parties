@@ -119,6 +119,16 @@ bool LobbyModel::init(Rml::Context* context) {
     ctor.Bind("share_codec",       &share_codec);
     ctor.Bind("share_scale",       &share_scale);
 
+    ctor.Bind("update_available",   &update_available);
+    ctor.Bind("update_downloading", &update_downloading);
+    ctor.Bind("update_ready",       &update_ready);
+    ctor.Bind("update_version",     &update_version);
+
+    ctor.BindEventCallback("apply_update",
+        [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (on_apply_update) on_apply_update();
+        });
+
     // Admin / permissions
     ctor.Bind("my_role",              &my_role);
     ctor.Bind("can_manage_channels",  &can_manage_channels);
@@ -577,6 +587,10 @@ void LobbyModel::dirty_all() {
     dirty("share_fps");
     dirty("share_codec");
     dirty("share_scale");
+    dirty("update_available");
+    dirty("update_downloading");
+    dirty("update_ready");
+    dirty("update_version");
     dirty("my_role");
     dirty("can_manage_channels");
     dirty("can_kick");

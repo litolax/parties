@@ -12,10 +12,11 @@ if(NOT APPLE)
 
     # Generate .rc with version info and icon
     file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/res/logo.ico" ICON_PATH)
-    set(RC_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
-    set(RC_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-    set(RC_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-    set(RC_VERSION_STR "${PROJECT_VERSION}")
+    set(RC_VERSION_MAJOR ${PARTIES_VERSION_MAJOR})
+    set(RC_VERSION_MINOR ${PARTIES_VERSION_MINOR})
+    set(RC_VERSION_PATCH ${PARTIES_VERSION_PATCH})
+    set(RC_VERSION_BUILD ${PARTIES_VERSION_BUILD})
+    set(RC_VERSION_STR "${PARTIES_VERSION_STR}")
     configure_file(res/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
     configure_file(res/app.manifest "${CMAKE_CURRENT_BINARY_DIR}/app.manifest" COPYONLY)
 endif()
@@ -82,6 +83,9 @@ else()
         src/dx12/RmlUi_Renderer_DX12WL.cpp
         src/dx12/offsetAllocator.cpp
         src/vulkan/RmlUi_Renderer_VK.cpp
+
+        # Auto-updater (WinHTTP)
+        src/windows/auto_updater.cpp
 
         # Screen capture — DXGI
         src/windows/screen_capture.cpp
@@ -248,6 +252,7 @@ else()
             d3d11 d3d12 dxgi d3dcompiler
             windowsapp
             dwmapi
+            winhttp wintrust crypt32
     )
 endif()
 

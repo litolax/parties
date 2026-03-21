@@ -1,6 +1,44 @@
 cmake_minimum_required(VERSION 3.20)
 project(parties VERSION 0.1.0 LANGUAGES CXX C)
 
+# ── Version from git tag ─────────────────────────────────────────────────────
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" describe --tags --match "v[0-9]*" --abbrev=0
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE GIT_TAG_RESULT
+    )
+    if(GIT_TAG_RESULT EQUAL 0 AND GIT_TAG MATCHES "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+        set(PARTIES_VERSION_MAJOR "${CMAKE_MATCH_1}")
+        set(PARTIES_VERSION_MINOR "${CMAKE_MATCH_2}")
+        set(PARTIES_VERSION_PATCH "${CMAKE_MATCH_3}")
+        set(PARTIES_VERSION_BUILD "${CMAKE_MATCH_4}")
+    elseif(GIT_TAG_RESULT EQUAL 0 AND GIT_TAG MATCHES "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+        set(PARTIES_VERSION_MAJOR "${CMAKE_MATCH_1}")
+        set(PARTIES_VERSION_MINOR "${CMAKE_MATCH_2}")
+        set(PARTIES_VERSION_PATCH "${CMAKE_MATCH_3}")
+        set(PARTIES_VERSION_BUILD "0")
+    endif()
+endif()
+if(NOT DEFINED PARTIES_VERSION_MAJOR)
+    set(PARTIES_VERSION_MAJOR 0)
+    set(PARTIES_VERSION_MINOR 0)
+    set(PARTIES_VERSION_PATCH 0)
+    set(PARTIES_VERSION_BUILD 0)
+endif()
+set(PARTIES_VERSION_STR "${PARTIES_VERSION_MAJOR}.${PARTIES_VERSION_MINOR}.${PARTIES_VERSION_PATCH}.${PARTIES_VERSION_BUILD}")
+message(STATUS "Parties version: ${PARTIES_VERSION_STR}")
+
+configure_file(
+    "${CMAKE_SOURCE_DIR}/common/include/parties/version.h.in"
+    "${CMAKE_BINARY_DIR}/generated/parties/version_gen.h"
+    @ONLY
+)
+
 if(APPLE)
     enable_language(OBJCXX)
 endif()

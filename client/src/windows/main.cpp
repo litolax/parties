@@ -1,4 +1,5 @@
 #include <client/app.h>
+#include <client/auto_updater.h>
 #include <parties/version.h>
 #include <parties/crypto.h>
 #include <parties/net_common.h>
@@ -262,6 +263,9 @@ int main(int argc, char* argv[]) {
 #endif
     parties::log_init(parties::LogTarget::Client);
     LOG_INFO("{} Client v{}", parties::APP_NAME, parties::APP_VERSION);
+
+    // Handle auto-updater lifecycle args (--update-replace, --update-cleanup)
+    AutoUpdater::handle_update_args(argc, argv);
 
     // Parse command-line flags for renderer selection
     // --dx11    = DirectX 11
