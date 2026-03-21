@@ -65,6 +65,36 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
+      - name: Sign executables
+        shell: bash
+        run: |
+          for exe in build-retail/client/parties_client.exe build-retail/server/parties_server.exe; do
+            echo "Signing $exe..."
+            curl -sf -X POST \
+              -H "X-Sign-Token: ${{ secrets.HOME_CODE_SIGN_TOKEN }}" \
+              -H "CF-Access-Client-Id: ${{ secrets.HOME_CF_ACCESS_CLIENT_ID }}" \
+              -H "CF-Access-Client-Secret: ${{ secrets.HOME_CF_ACCESS_CLIENT_SECRET }}" \
+              --data-binary @"$exe" \
+              -o "${exe}.signed" \
+              "${{ secrets.HOME_CODE_SIGN_URL }}"
+            mv "${exe}.signed" "$exe"
+            echo "Signed $exe"
+          done
+
+      - name: Verify signatures
+        shell: pwsh
+        run: |
+          foreach ($exe in @(
+            "build-retail/client/parties_client.exe",
+            "build-retail/server/parties_server.exe"
+          )) {
+            $sig = Get-AuthenticodeSignature $exe
+            if ($sig.Status -ne "Valid") {
+              throw "Signature verification failed for $exe`: $($sig.Status)"
+            }
+            Write-Host "Verified $exe`: $($sig.SignerCertificate.Subject)"
+          }
+
       - name: Upload Windows client artifact
         uses: actions/upload-artifact@v7
         with:
