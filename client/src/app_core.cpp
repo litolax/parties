@@ -593,11 +593,14 @@ void AppCore::leave_channel()
 
 void AppCore::watch_sharer(UserId id)
 {
+    // Stop watching the current sharer first (cleans up decode thread,
+    // server subscription, and video element)
+    if (viewing_sharer_ != 0 && viewing_sharer_ != id)
+        stop_watching();
+
     viewing_sharer_ = id;
     awaiting_keyframe_ = true;
     // Start decode thread FIRST so it's ready to receive the keyframe.
-    // Previously, PLI was sent before the thread started, causing the
-    // first keyframe to arrive while decode_running_==false → dropped.
     if (bridge_.start_decode_thread)
         bridge_.start_decode_thread();
     uint32_t id32 = id;
@@ -605,9 +608,7 @@ void AppCore::watch_sharer(UserId id)
                       reinterpret_cast<const uint8_t*>(&id32), 4);
     send_pli(id);
     model_.viewing_sharer_id = static_cast<int>(id);
-    // Don't dirty yet — platform dirties viewing_sharer_id when the first
-    // decoded frame is displayed, so the video area appears with content
-    // instead of flashing a black frame.
+    model_.dirty("viewing_sharer_id");
 }
 
 void AppCore::stop_watching()
