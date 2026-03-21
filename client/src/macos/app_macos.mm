@@ -10,6 +10,7 @@
 #import <AppKit/AppKit.h>
 #import <MetalKit/MetalKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreImage/CoreImage.h>
 
 // RmlUi Metal backend
 #import "../metal/RmlUi_Backend_macOS_Metal.h"
@@ -250,6 +251,10 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     bool                              _sharing;
     bool                              _encoderReady;
     bool                              _needsKeyframe;
+    uint32_t                          _encodeWidth;
+    uint32_t                          _encodeHeight;
+    bool                              _needsScale;
+    CIContext*                        _ciContext;
 
     // Stream audio — Opus encoder for screen share audio
     parties::OpusCodec                _streamAudioEncoder;
@@ -329,7 +334,11 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
     _sharing         = false;
     _encoderReady    = false;
     _streamRevealed  = false;
-    _needsKeyframe  = false;
+    _needsKeyframe   = false;
+    _encodeWidth     = 0;
+    _encodeHeight    = 0;
+    _needsScale      = false;
+    _ciContext       = nil;
 
     _soundPlayer.init();
 
@@ -635,20 +644,39 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
             uint32_t bitrate = (uint32_t)(bself->_core.model_.share_bitrate * 1000000.0f);
             static const uint32_t fps_table[] = { 15, 30, 60, 120 };
             uint32_t fps = fps_table[std::min(bself->_core.model_.share_fps, 3)];
-            if (!bself->_encoder->init(MacVideoCodec::H265, w, h, bitrate, fps)) {
+
+            // Codec selection: 0=H265 (best macOS default), 1=H264
+            MacVideoCodec mac_codec = (bself->_core.model_.share_codec == 1)
+                                        ? MacVideoCodec::H264 : MacVideoCodec::H265;
+
+            // Apply scale factor
+            static const float scale_factors[] = {1.0f, 0.75f, 0.5f, 0.25f};
+            int scale_idx = std::max(0, std::min(bself->_core.model_.share_scale, 3));
+            float sf = scale_factors[scale_idx];
+            uint32_t enc_w = ((uint32_t)(w * sf) + 1) & ~1u;
+            uint32_t enc_h = ((uint32_t)(h * sf) + 1) & ~1u;
+            if (enc_w < 64) enc_w = 64;
+            if (enc_h < 64) enc_h = 64;
+            bself->_encodeWidth  = enc_w;
+            bself->_encodeHeight = enc_h;
+            bself->_needsScale   = (enc_w != w || enc_h != h);
+
+            if (!bself->_encoder->init(mac_codec, enc_w, enc_h, bitrate, fps)) {
                 bself->_encoder.reset(); return;
             }
             bself->_encoderReady = true;
 
-            bself->_encoder->on_encoded = [bself](const uint8_t* data, size_t len, bool is_kf) {
+            VideoCodecId wire_codec = (mac_codec == MacVideoCodec::H264)
+                                       ? VideoCodecId::H264 : VideoCodecId::H265;
+            bself->_encoder->on_encoded = [bself, wire_codec](const uint8_t* data, size_t len, bool is_kf) {
                 if (!bself->_core.authenticated_) return;
 
                 uint32_t fn = bself->_core.video_frame_number_++;
                 uint32_t ts = 0;
                 uint8_t  flags = is_kf ? VIDEO_FLAG_KEYFRAME : 0;
-                uint16_t fw = (uint16_t)bself->_capturer->width();
-                uint16_t fh = (uint16_t)bself->_capturer->height();
-                uint8_t  codec = static_cast<uint8_t>(VideoCodecId::H265);
+                uint16_t fw = (uint16_t)bself->_encodeWidth;
+                uint16_t fh = (uint16_t)bself->_encodeHeight;
+                uint8_t  codec = static_cast<uint8_t>(wire_codec);
 
                 std::vector<uint8_t> pkt(1 + 4 + 4 + 1 + 2 + 2 + 1 + len);
                 size_t off = 0;
@@ -688,7 +716,34 @@ static int macos_modifiers_to_rml(NSEventModifierFlags flags)
 
         bool forceKF = bself->_needsKeyframe;
         bself->_needsKeyframe = false;
-        bself->_encoder->encode(buf, forceKF);
+
+        if (bself->_needsScale) {
+            // GPU-accelerated downscale via Core Image
+            CIImage* srcImage = [CIImage imageWithCVPixelBuffer:buf];
+            float sx = (float)bself->_encodeWidth  / (float)w;
+            float sy = (float)bself->_encodeHeight / (float)h;
+            CIImage* scaled = [srcImage imageByApplyingTransform:CGAffineTransformMakeScale(sx, sy)];
+
+            if (!bself->_ciContext)
+                bself->_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
+
+            CVPixelBufferRef scaledBuf = nullptr;
+            NSDictionary* attrs = @{
+                (id)kCVPixelBufferWidthKey:  @(bself->_encodeWidth),
+                (id)kCVPixelBufferHeightKey: @(bself->_encodeHeight),
+                (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                (id)kCVPixelBufferIOSurfacePropertiesKey: @{}
+            };
+            CVPixelBufferCreate(kCFAllocatorDefault, bself->_encodeWidth, bself->_encodeHeight,
+                                kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attrs, &scaledBuf);
+            if (scaledBuf) {
+                [bself->_ciContext render:scaled toCVPixelBuffer:scaledBuf];
+                bself->_encoder->encode(scaledBuf, forceKF);
+                CVPixelBufferRelease(scaledBuf);
+            }
+        } else {
+            bself->_encoder->encode(buf, forceKF);
+        }
     };
 
     // Stream audio: init Opus encoder and accumulation buffer (48 kHz, stereo, 20 ms frames)

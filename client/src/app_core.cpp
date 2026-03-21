@@ -226,6 +226,12 @@ void AppCore::load_saved_prefs()
     v = pref("video.share_fps");
     if (!v.empty()) model_.share_fps = std::atoi(v.c_str());
 
+    v = pref("video.share_codec");
+    if (!v.empty()) model_.share_codec = std::atoi(v.c_str());
+
+    v = pref("video.share_scale");
+    if (!v.empty()) model_.share_scale = std::atoi(v.c_str());
+
     // Restore saved device by name
     v = pref("audio.capture_device");
     if (!v.empty()) {
@@ -519,6 +525,8 @@ void AppCore::leave_channel()
     if (model_.is_sharing && bridge_.stop_screen_share)
         bridge_.stop_screen_share();
 
+    if (viewing_sharer_ != 0)
+        stop_watching();
     clear_all_sharers();
     model_.is_sharing = false;
     model_.dirty("is_sharing");
@@ -559,12 +567,15 @@ void AppCore::watch_sharer(UserId id)
 {
     viewing_sharer_ = id;
     awaiting_keyframe_ = true;
-    send_pli(id);
+    // Start decode thread FIRST so it's ready to receive the keyframe.
+    // Previously, PLI was sent before the thread started, causing the
+    // first keyframe to arrive while decode_running_==false → dropped.
     if (bridge_.start_decode_thread)
         bridge_.start_decode_thread();
     uint32_t id32 = id;
     net_.send_message(protocol::ControlMessageType::SCREEN_SHARE_VIEW,
                       reinterpret_cast<const uint8_t*>(&id32), 4);
+    send_pli(id);
     model_.viewing_sharer_id = static_cast<int>(id);
     // Don't dirty yet — platform dirties viewing_sharer_id when the first
     // decoded frame is displayed, so the video area appears with content

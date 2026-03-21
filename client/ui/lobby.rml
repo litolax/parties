@@ -353,6 +353,30 @@
             <div class="settings-section">
                 <div class="settings-label">Screen Sharing</div>
                 <div class="share-setting-group">
+                    <div class="settings-sublabel">Codec</div>
+                    <div class="share-codec-buttons">
+                        <div class="share-codec-btn" data-class-active="share_codec == 0"
+                             data-event-click="select_share_codec(0)" data-if="use_native_picker == false">AV1</div>
+                        <div class="share-codec-btn" data-class-active="share_codec == 0"
+                             data-event-click="select_share_codec(0)" data-if="use_native_picker">H.265</div>
+                        <div class="share-codec-btn" data-class-active="share_codec == 1"
+                             data-event-click="select_share_codec(1)">H.264</div>
+                    </div>
+                </div>
+                <div class="share-setting-group">
+                    <div class="settings-sublabel">Scale</div>
+                    <div class="share-codec-buttons">
+                        <div class="share-codec-btn" data-class-active="share_scale == 0"
+                             data-event-click="select_share_scale(0)">Source</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 1"
+                             data-event-click="select_share_scale(1)">75%</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 2"
+                             data-event-click="select_share_scale(2)">50%</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 3"
+                             data-event-click="select_share_scale(3)">25%</div>
+                    </div>
+                </div>
+                <div class="share-setting-group">
                     <div class="settings-sublabel">FPS</div>
                     <div class="share-codec-buttons">
                         <div class="share-codec-btn" data-class-active="share_fps == 0"
@@ -424,6 +448,30 @@
                              data-event-click="select_share_fps(2)">60</div>
                         <div class="share-codec-btn" data-class-active="share_fps == 3"
                              data-event-click="select_share_fps(3)">120</div>
+                    </div>
+                </div>
+                <div class="share-setting-group">
+                    <div class="settings-label">Codec</div>
+                    <div class="share-codec-buttons">
+                        <div class="share-codec-btn" data-class-active="share_codec == 0"
+                             data-event-click="select_share_codec(0)" data-if="use_native_picker == false">AV1</div>
+                        <div class="share-codec-btn" data-class-active="share_codec == 0"
+                             data-event-click="select_share_codec(0)" data-if="use_native_picker">H.265</div>
+                        <div class="share-codec-btn" data-class-active="share_codec == 1"
+                             data-event-click="select_share_codec(1)">H.264</div>
+                    </div>
+                </div>
+                <div class="share-setting-group">
+                    <div class="settings-label">Scale</div>
+                    <div class="share-codec-buttons">
+                        <div class="share-codec-btn" data-class-active="share_scale == 0"
+                             data-event-click="select_share_scale(0)">Source</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 1"
+                             data-event-click="select_share_scale(1)">75%</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 2"
+                             data-event-click="select_share_scale(2)">50%</div>
+                        <div class="share-codec-btn" data-class-active="share_scale == 3"
+                             data-event-click="select_share_scale(3)">25%</div>
                     </div>
                 </div>
                 <div class="share-setting-group">

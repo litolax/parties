@@ -89,8 +89,8 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
         return false;
     }
 
-    LOG_INFO("Selected codec: {} ({}x{} @ {} fps)",
-             codec_name(codec_), width, height, fps);
+    LOG_INFO("Selected codec: {} ({}x{} @ {} fps), bitrate: {} bps",
+             codec_name(codec_), width, height, fps, bitrate);
 
     GUID encode_guid = (codec_ == VideoCodecId::AV1)  ? NV_ENC_CODEC_AV1_GUID
                      : (codec_ == VideoCodecId::H265) ? NV_ENC_CODEC_HEVC_GUID
@@ -113,15 +113,14 @@ bool NvencEncoder::init(ID3D11Device* device, uint32_t width, uint32_t height,
 
     encode_config_ = preset_config.presetCfg;
     encode_config_.version = NV_ENC_CONFIG_VER;
-    encode_config_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+    encode_config_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
     encode_config_.rcParams.averageBitRate = bitrate;
-    encode_config_.rcParams.maxBitRate = bitrate * 8;
-    encode_config_.rcParams.vbvBufferSize = bitrate;            // 1 second of headroom
+    encode_config_.rcParams.maxBitRate = bitrate;
+    encode_config_.rcParams.vbvBufferSize = bitrate;             // 1-second VBV buffer
     encode_config_.rcParams.vbvInitialDelay = bitrate;
-
-    // Cap I-frame QP so keyframes don't look worse than predicted P-frames
-    encode_config_.rcParams.enableMaxQP = 1;
-    encode_config_.rcParams.maxQP = {36, 36, 20};               // {P, B, Intra}
+    encode_config_.rcParams.multiPass = NV_ENC_TWO_PASS_QUARTER_RESOLUTION;
+    encode_config_.rcParams.enableMinQP = 0;
+    encode_config_.rcParams.enableMaxQP = 0;
     encode_config_.gopLength = fps * (VIDEO_KEYFRAME_INTERVAL_MS / 1000);
     encode_config_.frameIntervalP = 1;
 
@@ -363,8 +362,9 @@ void NvencEncoder::set_bitrate(uint32_t bitrate) {
     if (!initialized_) return;
 
     encode_config_.rcParams.averageBitRate = bitrate;
-    encode_config_.rcParams.maxBitRate = bitrate * 8;
+    encode_config_.rcParams.maxBitRate = bitrate;
     encode_config_.rcParams.vbvBufferSize = bitrate;
+    encode_config_.rcParams.vbvInitialDelay = bitrate;
 
     NV_ENC_RECONFIGURE_PARAMS reconfig{};
     reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;

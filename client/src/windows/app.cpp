@@ -2,6 +2,7 @@
 
 #include <client/app.h>
 #include <client/app_core.h>
+#include <d3dcompiler.h>
 #include <client/context_menu.h>
 #include <client/screen_capture.h>
 #include <client/video_encoder.h>
@@ -165,6 +166,23 @@ bool App::init(HWND hwnd, int renderer_id) {
 
     bridge.request_keyframe = [this]() {
         if (encoder_) encoder_->force_keyframe();
+        // Wake the encode thread to re-encode last frame (handles static screens
+        // where capture stops delivering frames)
+        if (sharing_screen_ && encode_running_.load(std::memory_order_relaxed)) {
+            std::lock_guard<std::mutex> lock(encode_mutex_);
+            if (encode_ready_slot_ < 0 && encode_active_slot_ < 0) {
+                // Re-submit the last written slot
+                int last = encode_write_slot_;
+                // Find the most recently used slot that isn't the current write slot
+                for (int i = 0; i < ENCODE_SLOTS; i++) {
+                    if (i != encode_write_slot_) { last = i; break; }
+                }
+                encode_ready_slot_ = last;
+                LARGE_INTEGER now; QueryPerformanceCounter(&now);
+                encode_ready_ts_ = (now.QuadPart - capture_start_qpc_) * 10'000'000LL / qpc_frequency_;
+            }
+            encode_cv_.notify_one();
+        }
     };
 
     bridge.clear_video_element = [this]() {
@@ -561,6 +579,38 @@ void App::show_share_picker() {
     core_.model_.dirty("show_share_picker");
 }
 
+void App::init_scale_pipeline(ID3D11Device* device) {
+    if (scale_pipeline_ready_) return;
+
+    // Minimal fullscreen triangle VS (no vertex buffer needed)
+    const char* vs_src = R"(
+        void main(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD) {
+            uv = float2((id << 1) & 2, id & 2);
+            pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+        })";
+    const char* ps_src = R"(
+        SamplerState samp : register(s0);
+        Texture2D tex : register(t0);
+        float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
+            return tex.Sample(samp, uv);
+        })";
+
+    Microsoft::WRL::ComPtr<ID3DBlob> vs_blob, ps_blob, err;
+    if (FAILED(D3DCompile(vs_src, strlen(vs_src), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vs_blob, &err)) ||
+        FAILED(D3DCompile(ps_src, strlen(ps_src), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &ps_blob, &err))) {
+        LOG_ERROR("Scale shader compile failed"); return;
+    }
+    device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, &scale_vs_);
+    device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, &scale_ps_);
+
+    D3D11_SAMPLER_DESC sd{};
+    sd.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    device->CreateSamplerState(&sd, &scale_sampler_);
+
+    scale_pipeline_ready_ = (scale_vs_ && scale_ps_ && scale_sampler_);
+}
+
 void App::start_screen_share(int target_index) {
     ZoneScopedN("App::start_screen_share");
     if (sharing_screen_ || !core_.authenticated_ || core_.current_channel_ == 0) return;
@@ -596,6 +646,8 @@ void App::start_screen_share(int target_index) {
 
     core_.settings_.set_pref("video.share_bitrate", std::to_string(core_.model_.share_bitrate));
     core_.settings_.set_pref("video.share_fps",     std::to_string(core_.model_.share_fps));
+    core_.settings_.set_pref("video.share_codec",   std::to_string(core_.model_.share_codec));
+    core_.settings_.set_pref("video.share_scale",   std::to_string(core_.model_.share_scale));
 
     core_.video_frame_number_ = 0;
 
@@ -672,8 +724,18 @@ void App::start_screen_share(int target_index) {
         if (elapsed < capture_interval_qpc_) return;
         last_capture_qpc_ = now.QuadPart;
 
-        uint32_t tex_w = (desc.Width  + 1) & ~1u;
-        uint32_t tex_h = (desc.Height + 1) & ~1u;
+        uint32_t cap_w = (desc.Width  + 1) & ~1u;
+        uint32_t cap_h = (desc.Height + 1) & ~1u;
+
+        // Apply scale factor
+        constexpr float scale_factors[] = {1.0f, 0.75f, 0.5f, 0.25f};
+        int scale_idx = (std::max)(0, (std::min)(core_.model_.share_scale, 3));
+        float sf = scale_factors[scale_idx];
+        uint32_t tex_w = (static_cast<uint32_t>(cap_w * sf) + 1) & ~1u;
+        uint32_t tex_h = (static_cast<uint32_t>(cap_h * sf) + 1) & ~1u;
+        if (tex_w < 64) tex_w = 64;
+        if (tex_h < 64) tex_h = 64;
+        bool needs_scale = (tex_w != cap_w || tex_h != cap_h);
 
         if (encode_tex_w_ != tex_w || encode_tex_h_ != tex_h) {
             std::unique_lock<std::mutex> lock(encode_mutex_);
@@ -684,7 +746,8 @@ void App::start_screen_share(int target_index) {
             D3D11_TEXTURE2D_DESC sd{};
             sd.Width = tex_w; sd.Height = tex_h; sd.MipLevels = 1; sd.ArraySize = 1;
             sd.Format = desc.Format; sd.SampleDesc.Count = 1;
-            sd.Usage = D3D11_USAGE_DEFAULT; sd.BindFlags = 0;
+            sd.Usage = D3D11_USAGE_DEFAULT;
+            sd.BindFlags = needs_scale ? D3D11_BIND_RENDER_TARGET : 0;
             for (int i = 0; i < ENCODE_SLOTS; i++) {
                 encode_textures_[i].Reset();
                 HRESULT hr = capture_->device()->CreateTexture2D(&sd, nullptr, &encode_textures_[i]);
@@ -692,16 +755,56 @@ void App::start_screen_share(int target_index) {
             }
             encode_tex_w_ = tex_w; encode_tex_h_ = tex_h;
             encode_write_slot_ = 0; encode_ready_slot_ = -1;
+
+            // Recreate full-res source texture + SRV for scale blit
+            if (needs_scale) {
+                scale_src_tex_.Reset(); scale_src_srv_.Reset();
+                D3D11_TEXTURE2D_DESC src_desc{};
+                src_desc.Width = cap_w; src_desc.Height = cap_h; src_desc.MipLevels = 1; src_desc.ArraySize = 1;
+                src_desc.Format = desc.Format; src_desc.SampleDesc.Count = 1;
+                src_desc.Usage = D3D11_USAGE_DEFAULT; src_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                capture_->device()->CreateTexture2D(&src_desc, nullptr, &scale_src_tex_);
+                capture_->device()->CreateShaderResourceView(scale_src_tex_.Get(), nullptr, &scale_src_srv_);
+                scale_src_w_ = cap_w; scale_src_h_ = cap_h;
+                init_scale_pipeline(capture_->device());
+            }
         }
 
         int ws;
         { std::lock_guard<std::mutex> lock(encode_mutex_); ws = encode_write_slot_; }
 
-        {
+        if (needs_scale && scale_pipeline_ready_) {
+            ZoneScopedN("capture::ScaleBlit");
+            auto* ctx = capture_->context();
+
+            // Copy capture to full-res source texture
+            D3D11_BOX src_box = { 0, 0, 0, desc.Width, desc.Height, 1 };
+            ctx->CopySubresourceRegion(scale_src_tex_.Get(), 0, 0, 0, 0, texture, 0, &src_box);
+
+            // Create RTV for the scaled staging slot
+            Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+            capture_->device()->CreateRenderTargetView(encode_textures_[ws].Get(), nullptr, &rtv);
+
+            // Blit with bilinear downscale
+            D3D11_VIEWPORT vp = { 0, 0, (float)tex_w, (float)tex_h, 0, 1 };
+            ctx->RSSetViewports(1, &vp);
+            ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+            ctx->VSSetShader(scale_vs_.Get(), nullptr, 0);
+            ctx->PSSetShader(scale_ps_.Get(), nullptr, 0);
+            ctx->PSSetShaderResources(0, 1, scale_src_srv_.GetAddressOf());
+            ctx->PSSetSamplers(0, 1, scale_sampler_.GetAddressOf());
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ctx->IASetInputLayout(nullptr);
+            ctx->Draw(3, 0);
+
+            // Unbind
+            ID3D11ShaderResourceView* null_srv = nullptr;
+            ID3D11RenderTargetView* null_rtv = nullptr;
+            ctx->PSSetShaderResources(0, 1, &null_srv);
+            ctx->OMSetRenderTargets(1, &null_rtv, nullptr);
+            ctx->Flush();
+        } else {
             ZoneScopedN("capture::CopyResource");
-            // Use CopySubresourceRegion: source texture may have odd dimensions
-            // while encode texture is even-rounded. CopyResource silently fails
-            // when dimensions don't match.
             D3D11_BOX src_box = { 0, 0, 0, desc.Width, desc.Height, 1 };
             capture_->context()->CopySubresourceRegion(
                 encode_textures_[ws].Get(), 0, 0, 0, 0,
@@ -763,6 +866,8 @@ void App::stop_screen_share() {
     }
     if (encoder_ && encode_registered_) { encoder_->unregister_inputs(); }
     for (auto& t : encode_textures_) t.Reset();
+    scale_src_tex_.Reset(); scale_src_srv_.Reset(); scale_src_w_ = 0; scale_src_h_ = 0;
+    scale_vs_.Reset(); scale_ps_.Reset(); scale_sampler_.Reset(); scale_pipeline_ready_ = false;
     encode_tex_w_ = 0; encode_tex_h_ = 0; encode_registered_ = false;
     for (auto& s : encode_nvenc_slots_) s = -1;
     encode_on_encoded_ = nullptr;
@@ -792,13 +897,14 @@ void App::on_video_frame_received(uint32_t sender_id, const uint8_t* data, size_
 
     if (core_.awaiting_keyframe_) {
         if (!is_keyframe) return;
-        core_.awaiting_keyframe_ = false;
     }
 
     const uint8_t* encoded     = data + 14;
     size_t         encoded_len = len  - 14;
 
     if (decode_running_ && encoded_len > 0) {
+        // Only clear awaiting_keyframe_ when we can actually queue the frame
+        core_.awaiting_keyframe_ = false;
         uint32_t frame_number;
         std::memcpy(&frame_number, data, 4);
         DecodeWork work;
@@ -841,7 +947,7 @@ void App::encode_loop() {
         uint32_t w = encode_tex_w_, h = encode_tex_h_;
 
         if (!encoder_ || w != encoder_->width() || h != encoder_->height()) {
-            VideoCodecId codec = encoder_ ? encoder_->codec() : VideoCodecId::AV1;
+            VideoCodecId codec = core_.model_.share_codec == 1 ? VideoCodecId::H264 : VideoCodecId::AV1;
             encoder_.reset(); encode_registered_ = false;
             auto enc = std::make_unique<VideoEncoder>();
             uint32_t bitrate_bps = static_cast<uint32_t>(core_.model_.share_bitrate * 1'000'000.0f);

@@ -113,6 +113,16 @@ private:
     int64_t last_capture_qpc_    = 0;
     int64_t capture_interval_qpc_ = 0;
 
+    // GPU downscale resources (bilinear blit via pixel shader)
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>      scale_ps_;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader>     scale_vs_;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState>     scale_sampler_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>        scale_src_tex_;    // full-res capture copy
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> scale_src_srv_;
+    uint32_t scale_src_w_ = 0, scale_src_h_ = 0;
+    bool scale_pipeline_ready_ = false;
+    void init_scale_pipeline(ID3D11Device* device);
+
     // Encode thread with triple-buffered staging textures
     static constexpr int ENCODE_SLOTS = 3;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> encode_textures_[ENCODE_SLOTS];
