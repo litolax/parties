@@ -1076,14 +1076,28 @@ void App::decode_loop() {
         while (!batch.empty()) {
             auto& work = batch.front();
             if (!decoder_ || decoder_->context_lost() || decoder_->codec() != work.codec) {
+                bool was_context_lost = decoder_ && decoder_->context_lost();
+                bool codec_changed = decoder_ && !decoder_->context_lost() &&
+                                     decoder_->codec() != work.codec;
                 if (decoder_) decoder_->shutdown();
                 decoder_ = std::make_unique<VideoDecoder>();
+                if (was_context_lost) {
+                    LOG_WARN("Decoder context lost, falling back to software decoding");
+                    decoder_->disable_hardware();
+                }
                 if (!decoder_->init(work.codec, work.width, work.height)) {
                     LOG_ERROR("Decoder init failed codec={} {}x{}",
                                  static_cast<uint8_t>(work.codec), work.width, work.height);
                     decoder_.reset(); batch.pop(); continue;
                 }
                 decoder_->on_decoded = [this](const DecodedFrame& f) { on_video_decoded(f); };
+
+                // Request keyframe when codec changes mid-stream so the new
+                // decoder gets a sequence header it can actually parse.
+                if (codec_changed && core_.viewing_sharer_ != 0) {
+                    LOG_INFO("Codec changed mid-stream, requesting keyframe");
+                    core_.send_pli(core_.viewing_sharer_);
+                }
             }
             decoder_->decode(work.data.data(), work.data.size(), work.timestamp);
             batch.pop();
