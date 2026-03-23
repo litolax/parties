@@ -79,7 +79,6 @@ public:
     ChannelId   pending_channel_id_    = 0;
     uint16_t    voice_seq_             = 0;
     UserId      viewing_sharer_        = 0;
-    UserId      last_watched_sharer_   = 0;  // for auto-rewatch on stream restart
     bool        awaiting_keyframe_     = false;
     uint32_t    video_frame_number_    = 0;
     std::atomic<uint32_t> stream_frame_count_{0};

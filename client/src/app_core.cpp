@@ -485,7 +485,6 @@ void AppCore::on_disconnect_cleanup()
     channel_key_ = {};
     server_password_.clear();
     viewing_sharer_ = 0;
-    last_watched_sharer_ = 0;
     awaiting_keyframe_ = false;
     video_frame_number_ = 0;
     awaiting_connection_ = false;
@@ -639,7 +638,6 @@ void AppCore::send_pli(UserId target)
 void AppCore::clear_all_sharers()
 {
     viewing_sharer_ = 0;
-    last_watched_sharer_ = 0;
     awaiting_keyframe_ = false;
     active_sharers_.clear();
     model_.sharers.clear();
@@ -1047,13 +1045,6 @@ void AppCore::on_screen_share_started(const uint8_t* data, size_t len)
     model_.dirty("sharers");
     model_.dirty("someone_sharing");
     model_.dirty("channels");
-
-    // Auto-rewatch if we were watching this sharer before they restarted
-    if (last_watched_sharer_ == sharer_id) {
-        last_watched_sharer_ = 0;
-        LOG_INFO("Auto-rewatching sharer {} after stream restart", sharer_id);
-        watch_sharer(sharer_id);
-    }
 }
 
 void AppCore::on_screen_share_stopped(const uint8_t* data, size_t len)
@@ -1061,10 +1052,6 @@ void AppCore::on_screen_share_stopped(const uint8_t* data, size_t len)
     if (len < 4) return;
     uint32_t sharer_id;
     std::memcpy(&sharer_id, data, 4);
-
-    // Remember if we were watching this sharer (for auto-rewatch on restart)
-    if (viewing_sharer_ == sharer_id)
-        last_watched_sharer_ = sharer_id;
 
     auto it = std::remove_if(model_.sharers.begin(), model_.sharers.end(),
         [sharer_id](const ActiveSharer& a) { return a.id == static_cast<int>(sharer_id); });
